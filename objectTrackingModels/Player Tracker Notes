@@ -1,0 +1,15 @@
+Training the model:
+    yolo detect train data=data.yaml model=yolov8n.pt epochs=20
+
+    - the higher the epochs, the more precise the model will be
+        - however, also the longer the model takes to train
+    - data.yaml classes must match the YOLO labels exactly
+
+Testing the model:
+    yolo detect predict model=runs/detect/train/weights/best.pt source=testImages save_txt = True conf = 0.1
+
+    - source must point to a folder with test images so the model can predict and evaluate its work
+    - save_txt is a troubleshooting tool to see what the model is examining and finding in the images
+    - predictions will be saved in 'predict' folders and provide images with trackers and a .txt file with box dimensions
+    - make sure the model path has the most up to date training models
+    - adjust the 'conf' when testing the model with fewer datasets before improving the model
