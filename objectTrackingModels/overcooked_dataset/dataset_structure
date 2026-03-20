@@ -8,3 +8,6 @@ overcooked_dataset
 
 notes:
 each image in train and val have a matching .txt file in labels with the same name that holds labels and locations
+
+* dataset too large to make sense to upload in its entiry to Github, find the files here:
+https://drive.google.com/drive/folders/1s1-6dZ1wvyl9SH1-bf7IONBgD5-Ot-Yg?usp=sharing
