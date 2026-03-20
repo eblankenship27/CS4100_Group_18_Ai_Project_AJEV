@@ -1,0 +1,10 @@
+overcooked_dataset
+  -> images
+    -> train
+    -> val
+  -> labels
+    -> train
+    -> val
+
+notes:
+each image in train and val have a matching .txt file in labels with the same name that holds labels and locations
