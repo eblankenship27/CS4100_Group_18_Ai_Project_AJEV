@@ -1,5 +1,6 @@
 Training the model:
-    yolo detect train data=data.yaml model=yolov8n.pt epochs=20
+    cd objectTrackingModels
+    yolo detect train data=data.yaml model=runs/detect/train/weights/best.pt epochs=50
 
     - the higher the epochs, the more precise the model will be
         - however, also the longer the model takes to train

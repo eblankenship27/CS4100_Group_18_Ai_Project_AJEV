@@ -9,10 +9,10 @@ import cv2
 model = YOLO("runs/detect/train/weights/best.pt")
 
 # Read an image (or frame)
-frame = cv2.imread("testImages/frame_0186.png")
+frame = cv2.imread("testImages/frame_0188.png")
 
 # Run detection
-results = model(frame, conf = 0.1)
+results = model(frame, conf = 0.5)
 
 # Process detections
 detections = []
