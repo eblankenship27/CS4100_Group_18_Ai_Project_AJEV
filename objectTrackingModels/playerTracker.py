@@ -1,35 +1,34 @@
 from ultralytics import YOLO
 import cv2
+import numpy as np
+import mss
 
-# this is an example of how the model can be used to find the objects on a screenshot
-# when used in the actual game, it must track on a live moving stream
-# to test images, add them to the testImages folder and change the frame path
+model = YOLO("objectTrackingModels/runs/detect/train2/weights/best.pt")
 
-# Load your trained model
-model = YOLO("runs/detect/train/weights/best.pt")
+sct = mss.mss()
 
-# Read an image (or frame)
-frame = cv2.imread("testImages/frame_0188.png")
+# monitor = {
+#     "top": 100,
+#     "left": 100,
+#     "width": 800,
+#     "height": 600
+# }
 
-# Run detection
-results = model(frame, conf = 0.5)
+monitor = sct.monitors[1]
 
-# Process detections
-detections = []
+while True:
+    screenshot = sct.grab(monitor)
 
-for r in results:
-    for box, cls, conf in zip(r.boxes.xyxy, r.boxes.cls, r.boxes.conf):
-        x1, y1, x2, y2 = box.tolist()
-        detections.append({
-            # which item/class it has found
-            "class": int(cls),
+    frame = np.array(screenshot)
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
 
-            # how confident it is that it is the object
-            "confidence": float(conf),
+    results = model(frame, conf=0.3)
 
-            # the location of the object
-            "bbox": [x1, y1, x2, y2]
-        })
+    annotated_frame = results[0].plot()
 
-print("Detections:")
-print(detections)
+    cv2.imshow("YOLO Screen Tracking", annotated_frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cv2.destroyAllWindows()
