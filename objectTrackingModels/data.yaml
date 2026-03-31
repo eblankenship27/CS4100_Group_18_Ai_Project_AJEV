@@ -1,0 +1,11 @@
+path: overcooked_dataset
+train: images/train
+val: images/val
+
+names:
+  0: chef
+  1: plate
+  2: fish
+  3: shrimp
+  4: cutFish
+  5: cutShrimp

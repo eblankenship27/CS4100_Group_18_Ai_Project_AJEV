@@ -1,0 +1,74 @@
+BASIC OPEN CV NOTES
+
+Images
+- images are numpy arrays
+- an image shape is given by its height, width, and number of channels
+- an image is made by pixels
+  - in most cases pixel value range from 0 to 255
+  - in binary images pixel value is in [0,1] (or [0,255])
+  - in 16 bits images pixel value range from 0 to 65535
+
+Input / Output
+
+- # read image
+import os
+import cv2
+
+image_path = os.path.join('.', 'data', 'bird.jpg')
+img = cv2.imread(image_path)
+
+- # write image
+cv2.imwrite(os.path.join('.', 'data', 'bird_out.jpg'))
+
+- # visualize images
+cv2.imshow('image', img)
+// very important, tells program to wait until key is pressed
+// if forgotten, nothing will show up
+cv2.waitKey(0)
+
+- # read video
+video_path = os.path.join('.', 'data', 'monkey.mp4')
+video = cv2.VideoCapture(video_path)
+
+- # visualize video
+ret = True
+while ret:
+  ret,frame = video.read()
+
+  cv2.imshow('frame', frame())
+  cv2.waitKey(40)
+
+NOTES FOR SPECIFIC TOOLS FOR OVERCOOKED
+
+- State Repersentation and Image Processing
+  images to detect: the player, ingredients (fish, shrimp), 
+  plates, cutting boards, counter, order tickets, delivery tickets
+
+  Example of state repersentation :
+    {
+      player_position: (x, y),
+      item_in_hand: NULL // or "fish",
+      cutting_boards: [{position: (x, y), holding_item: true, item_cut: false}],
+      ingredients: [{item: "fish", position: (x, y)}, {item: "shrimp", position: (x,y)}],
+      ETC
+    }
+
+  - Image processing pipeline:
+    frame capture -> resize -> color conversion -> blur -> detection
+
+  - Object Detection Options
+    - Template Matching:
+      Pros: simple, no training
+      Cons: Sensitive to rotation, sensitive to animation, scale changes break detection
+    - Deep Learning Object Detection:
+      Pros: Robust to animation, works with multiple objects, can run in real time
+      Cons: require training
+      BEST FOR OVERCOOKED DUE TO ACCURACY THROUGH ANIMATION
+
+  - Dataset
+  need to capture 300 - 2000 labeled images
+
+  - Vision Pipeline
+    capture gameplay frame, resize frame, run object detection, 
+    convert bounding boxes to tile position, track objects across frames,
+    construct structured game state, send state to AI decision maker
