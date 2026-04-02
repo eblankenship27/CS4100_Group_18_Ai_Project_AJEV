@@ -259,6 +259,7 @@ class OvercookedEnv(gym.Env):
         reward = self._compute_reward(self.prev_state, curr_state, action)
         self.prev_state = curr_state
 
+        # where are we checking the time left for terminating
         terminated = False
         truncated = self.step_count >= self.max_steps
 
