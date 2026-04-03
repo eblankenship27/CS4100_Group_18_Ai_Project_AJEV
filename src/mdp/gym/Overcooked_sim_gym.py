@@ -150,6 +150,8 @@ class OvercookedSimEnv(gym.Env):
     def step(self, action: int):
         self.step_count += 1
         
+        # TODO: implement plate shelf to continously replace the plates 
+        
         events = {}
         if action == ACTION_CHOP:
             events = self._try_chop()
@@ -200,6 +202,8 @@ class OvercookedSimEnv(gym.Env):
     
     def _try_chop(self) -> dict:
         # Define the action of the agent trying to chop an item at a cutting board
+        
+        # TODO: Implement plate shelf where you can't place things on it?
         
         cell = self._facing_cell()
         if cell is None:

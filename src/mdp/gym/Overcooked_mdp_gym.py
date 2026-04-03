@@ -93,6 +93,11 @@ class OvercookedEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-1.0, high=1.0, shape=(24,), dtype=np.float32
         )
+        
+        # TODO: Implement hard coded 'static values' such as the fish box
+        self._static_positions = {}
+        
+        # TODO: Implement the chef facing values
 
         self.max_steps = 500
         self.step_count = 0
@@ -133,9 +138,9 @@ class OvercookedEnv(gym.Env):
             "shrimp": [],
             "cutFish": [],
             "cutShrimp": [],
-            "servingCounter": None,
-            "fishBox": None,
-            "shrimpBox": None
+            # "servingCounter": None,
+            # "fishBox": None,
+            # "shrimpBox": None
         }
         class_to_key = {
             0: "chef",
@@ -144,9 +149,9 @@ class OvercookedEnv(gym.Env):
             3: "shrimp",
             4: "cutFish",
             5: "cutShrimp",
-            6: "servingCounter",
-            7: "fishBox",
-            8: "shrimpBox"
+            # 6: "servingCounter",
+            # 7: "fishBox",
+            # 8: "shrimpBox"
         }
         for det in detections:
             key = class_to_key.get(det["class"])
@@ -157,19 +162,21 @@ class OvercookedEnv(gym.Env):
             else:
                 state[key].append(det["center"])
 
-        # Manual positions override YOLO detections (normalized to [0,1])
-        w, h = self.monitor["width"], self.monitor["height"]
-        if self._manual_serving_pos is not None:
-            state["servingCounter"] = (self._manual_serving_pos[0] / w, self._manual_serving_pos[1] / h)
-        if self._manual_fish_box_pos is not None:
-            state["fishBox"] = (self._manual_fish_box_pos[0] / w, self._manual_fish_box_pos[1] / h)
-        if self._manual_shrimp_box_pos is not None:
-            state["shrimpBox"] = (self._manual_shrimp_box_pos[0] / w, self._manual_shrimp_box_pos[1] / h)
+        # # Manual positions override YOLO detections (normalized to [0,1])
+        # w, h = self.monitor["width"], self.monitor["height"]
+        # if self._manual_serving_pos is not None:
+        #     state["servingCounter"] = (self._manual_serving_pos[0] / w, self._manual_serving_pos[1] / h)
+        # if self._manual_fish_box_pos is not None:
+        #     state["fishBox"] = (self._manual_fish_box_pos[0] / w, self._manual_fish_box_pos[1] / h)
+        # if self._manual_shrimp_box_pos is not None:
+        #     state["shrimpBox"] = (self._manual_shrimp_box_pos[0] / w, self._manual_shrimp_box_pos[1] / h)
 
         return state
 
     def _encode_state(self, game_state):
         obs = np.full(24, -1.0, dtype=np.float32)
+        
+        # TODO: Add Chef facing information (could have it based on the last movement)
 
         if game_state["chef"] is not None:
             obs[0], obs[1] = game_state["chef"]
@@ -289,6 +296,11 @@ class OvercookedEnv(gym.Env):
 
     def _execute_action(self, action):
         pyautogui.press(KEYMAP[action])
+        # TODO: Implement actions to correlate from discretized state to the actual game
+        
+        # Examples:
+        # - Set the movement to hold and do it
+        # - When pickup/putdown, move towards tile slightly? 
 
     def render(self):
         if self.render_mode == "human":
