@@ -4,7 +4,6 @@ import numpy as np
 import gymnasium as gym
 
 import os
-from src.env.Overcooked_mdp_gym import OvercookedEnv
 
 class OvercookedAgent:
     def __init__(self, env: gym.Env, initial_epsilon: float, decay_rate: float, final_epsilon: float, discount_factor: float = 0.99):
@@ -70,7 +69,7 @@ class OvercookedAgent:
         """Reduce exploration rate after each episode."""
         self.epsilon = max(self.final_epsilon, self.epsilon * self.epsilon_decay)
 
-    def save(self, filename):
+    def save(self, filename, update_filename):
         """Merges current Q-values into an existing save file, or creates one if none exists."""
         if os.path.exists(filename):
             saved = np.load(filename, allow_pickle=True).item()
@@ -78,18 +77,29 @@ class OvercookedAgent:
         else:
             saved = dict(self.q_table)
         np.save(filename, saved)
+        
+        if os.path.exists(update_filename):
+            u_saved = np.load(update_filename, allow_pickle=True).item()
+            u_saved.update(dict(self.update_counts))
+        else:
+            u_saved = dict(self.update_counts)
+        np.save(update_filename, u_saved)
 
-    def load(self, filename):
+    def load(self, q_filename, update_filename):
         """Loads a previously saved Q-table from a file."""
-        saved = np.load(filename, allow_pickle=True).item()
+        saved = np.load(q_filename, allow_pickle=True).item()
+        saved_updates = np.load(update_filename, allow_pickle=True).item()
         self.q_table = defaultdict(lambda: np.zeros(self.env.action_space.n), saved)
+        self.update_counts = defaultdict(lambda: np.zeros(self.env.action_space.n), saved_updates)
 
 
 def run_training(
     n_episodes: int = 1000,
-    save_file: str = "q_table.npy",
+    save_file: str = "q_table.pickle",
+    update_file: str = "update_table.pickle",
     save_every: int = 50,
     render: bool = False,
+    env_type: str = 'sim',
 ):
     """Train the Q-learning agent on Overcooked.
 
@@ -101,7 +111,12 @@ def run_training(
     """
 
     render_mode = "human" if render else None
-    env = OvercookedEnv(render_mode=render_mode)
+    if env_type == 'sim':
+        from gym.Overcooked_sim_gym import OvercookedSimEnv
+        env = OvercookedSimEnv(render_mode=render_mode)
+    else:
+        from gym.Overcooked_mdp_gym import OvercookedEnv
+        env = OvercookedEnv(render_mode=render_mode)
 
     agent = OvercookedAgent(
         env=env,
@@ -112,8 +127,8 @@ def run_training(
     )
 
     # Resume from checkpoint if one exists
-    if os.path.exists(save_file):
-        agent.load(save_file)
+    if os.path.exists(save_file) and os.path.exists(update_file):
+        agent.load(save_file, update_filename=update_file)
         print(f"Loaded existing Q-table from {save_file}")
 
     episode_rewards = []
@@ -138,7 +153,7 @@ def run_training(
         # Decay epsilon after each episode
         agent.epsilon = max(
             agent.final_epsilon,
-            agent.epsilon - agent.epsilon_decay
+            agent.epsilon * agent.epsilon_decay
         )
 
         episode_rewards.append(total_reward)
@@ -146,11 +161,11 @@ def run_training(
         print(f"Episode {episode:>5}/{n_episodes}  reward={total_reward:>8.2f}  epsilon={agent.epsilon:.3f}")
 
         if episode % save_every == 0:
-            agent.save(save_file)
+            agent.save(save_file, update_filename=update_file)
             print(f"  -> Q-table saved to {save_file}")
 
     # Final save
-    agent.save(save_file)
+    agent.save(save_file, update_filename=update_file)
     env.close()
     print(f"\nTraining complete. Average reward: {sum(episode_rewards)/len(episode_rewards):.2f}")
 
@@ -159,9 +174,11 @@ if __name__ == "__main__":
     # In order to run training, make sure that overcooked is open and visable on screen, then run
     # python Overcooked_Q_Agent.py
     
-    n_episodes: int = 1000,
-    save_file: str = "q_table.npy",
-    save_every: int = 50,
-    render: bool = False,
-    
-    run_training(n_episodes=n_episodes, save_file=save_file, save_every=save_every, render=render)
+    run_training(
+        n_episodes=1000, 
+        save_file='q_table.pickle', 
+        update_file='update_table.pickle', 
+        save_every=50, 
+        render=False,
+        env_type='sim', 
+    )
