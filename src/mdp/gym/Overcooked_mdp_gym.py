@@ -104,6 +104,27 @@ class OvercookedEnv(gym.Env):
         self.prev_state = None
         self.held_item = HOLD_NONE
 
+        # Statistics for chef timings and coordinates
+        self.move_vertical_time = 1.05
+        self.move_horizontal_time = 2.0
+        self.chop_time = 7.0
+        self.interact_time = 0.2
+
+        self.raw_static_pixels = {
+            "fish_box": (414, 502),
+            "shrimp_box": (1500, 590),
+            "plate_dispenser": (1479, 500),
+            "serving": (1460, 373),
+            "cutting_boards": [
+                (396, 717), (505, 717),
+                (1390, 717), (1502, 717)
+            ],
+            "plates": [
+                (650, 444), (748, 444),
+                (1141, 444), (1240, 444)
+            ]
+        }
+
     # ------------------------------------------------------------------
     # Vision pipeline
     # ------------------------------------------------------------------
