@@ -13,10 +13,22 @@ CLASS_NAMES = {
     3: "shrimp",
     4: "cutFish",
     5: "cutShrimp",
-    6: "servingCounter",
-    7: "fishBox",
-    8: "shrimpBox"
 }
+
+# statoinary objects
+STATIC_STATIONS = {
+    "choppingBoards": [(396, 717), (505, 717), (1390, 717), (1502, 717)],
+    "servingCounter": (1460, 373),
+    "fishBox":        (414, 502),
+    "shrimpBox":      (1500, 590),
+}
+
+# kitchen bounds
+# [200:665, 400:1500]
+KITCHEN_TOP = 200
+KITCHEN_BOTTOM = 665
+KITCHEN_LEFT = 400
+KITCHEN_RIGHT = 1500
 
 # Held-item indices (used for one-hot encoding in observation)
 HOLD_NONE = 0
@@ -43,9 +55,13 @@ KEYMAP = {
     ACTION_PICKUP: 'space'
 }
 
-
 class OvercookedEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 10}
+
+    def _normalize(self, px, py):
+        nx = (px - self.monitor["left"]) / self.monitor["width"]
+        ny = (py - self.monitor["top"])  / self.monitor["height"]
+        return (nx, ny)
 
     def __init__(
         self,
@@ -57,34 +73,44 @@ class OvercookedEnv(gym.Env):
         self.players = players
         self.render_mode = render_mode
 
-        # Set up the 
+        # Set up the OpenCV screen and object detection model
         self.model = YOLO(model_path)
         self.sct = mss.mss()
+         # TODO: MUST BE CHANGED BASED ON THE SCREEN CAPTURE
+         # IF IT IS WHOLE SCREEN IT SHOULD BE 0, 0, (WIDTH OF SCREEN), (HEIGHT OF SCREEN)
         self.monitor = {"top": 200, "left": 0, "width": 600, "height": 400}
 
         self.actions = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'CHOP', 'PICKUP']
         self.action_space = spaces.Discrete(len(self.actions))
 
-        # Continuous state observations hashed into 24-float observation vector:
-        # [0-1]   chef (x, y)
-        # [2-7]   one-hot: held item (none/plate/fish/shrimp/cutFish/cutShrimp)
-        # [8-9]   first plate center
-        # [10-11] first fish center
-        # [12-13] first shrimp center
-        # [14-15] first cutFish center
-        # [16-17] first cutShrimp center
-        # [18-19] serving counter center (from YOLO class 6)
-        # [20-21] fish box center (from YOLO class 7)
-        # [22-23] shrimp box center (from YOLO class 8)
-        # Undetected objects default to (-1, -1)
-        self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(24,), dtype=np.float32
-        )
+        # Discrete state tuple (used as Q-table key):
+        # (gx, gy)            chef tile position on 11x6 grid (-1,-1 if undetected)
+        # held                held item: 0=none 1=plate 2=fish 3=shrimp 4=cutFish 5=cutShrimp
+        # near_fishbox        bool: chef near fish supply box
+        # near_shrimpbox      bool: chef near shrimp supply box
+        # near_serving        bool: chef near serving counter
+        # near_chopping_board bool: chef near chopping board
+        # has_fish            bool: raw fish visible on counter
+        # has_shrimp          bool: raw shrimp visible on counter
+        # has_cut_fish        bool: cut fish visible on counter
+        # has_cut_shrimp      bool: cut shrimp visible on counter
+        # has_plate           bool: plate visible on counter
+        # order               current order: 0=none 1=fish 2=shrimp
+        self.observation_space = spaces.MultiDiscrete([11, 6, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3])
 
         self.max_steps = 500
         self.step_count = 0
         self.prev_state = None
         self.held_item = HOLD_NONE
+
+        self.serving_counter_pos  = self._normalize(*STATIC_STATIONS["servingCounter"])
+        self.fish_box_pos         = self._normalize(*STATIC_STATIONS["fishBox"])
+        self.shrimp_box_pos       = self._normalize(*STATIC_STATIONS["shrimpBox"])
+        self.chopping_board_pos   = [self._normalize(*p) for p in STATIC_STATIONS["choppingBoards"]]
+
+        # Normalize kitchen bounds
+        self.kitchen_left,  self.kitchen_top    = self._normalize(KITCHEN_LEFT,  KITCHEN_TOP)
+        self.kitchen_right, self.kitchen_bottom = self._normalize(KITCHEN_RIGHT, KITCHEN_BOTTOM)
 
     # ------------------------------------------------------------------
     # Vision pipeline
@@ -119,10 +145,7 @@ class OvercookedEnv(gym.Env):
             "fish": [],
             "shrimp": [],
             "cutFish": [],
-            "cutShrimp": [],
-            "servingCounter": None,
-            "fishBox": None,
-            "shrimpBox": None
+            "cutShrimp": []
         }
         class_to_key = {
             0: "chef",
@@ -130,40 +153,87 @@ class OvercookedEnv(gym.Env):
             2: "fish",
             3: "shrimp",
             4: "cutFish",
-            5: "cutShrimp",
-            6: "servingCounter",
-            7: "fishBox",
-            8: "shrimpBox"
+            5: "cutShrimp"
         }
         for det in detections:
             key = class_to_key.get(det["class"])
             if key is None:
                 continue
-            if key in ("chef", "servingCounter", "fishBox", "shrimpBox"):
+            if key == "chef":
                 state[key] = det["center"]
             else:
                 state[key].append(det["center"])
         return state
 
-    def _encode_state(self, game_state):
-        obs = np.full(24, -1.0, dtype=np.float32)
-
+    def _encode_state(self, game_state, order):
+        # chef location: 11x6 grid matching game tiles
+        # if chef exists on the screen
         if game_state["chef"] is not None:
-            obs[0], obs[1] = game_state["chef"]
+            cx, cy = game_state["chef"]
+            # relational to kitchen bounds
+            nx = (cx - self.kitchen_left) / (self.kitchen_right - self.kitchen_left)
+            ny = (cy - self.kitchen_top)  / (self.kitchen_bottom - self.kitchen_top)
+            # fits the location into a 11 x 6 grid to shrink grid sizes
+            gx = int(np.clip(nx, 0, 0.999) * 11)
+            gy = int(np.clip(ny, 0, 0.999) * 6)
+        else:
+            gx, gy = -1, -1
 
-        obs[2 + self.held_item] = 1.0
+        # 2. Held item: 0-5
+        held = self.held_item
 
-        for i, key in enumerate(["plates", "fish", "shrimp", "cutFish", "cutShrimp"]):
-            if game_state[key]:
-                obs[8 + 2 * i] = game_state[key][0][0]
-                obs[8 + 2 * i + 1] = game_state[key][0][1]
+        # 3. Proximity to key stations
+        chef_pos = game_state["chef"]
+        near_fishbox   = self._nearest_item(chef_pos, [self.fish_box_pos])
+        near_shrimpbox = self._nearest_item(chef_pos, [self.shrimp_box_pos])
+        near_serving   = self._nearest_item(chef_pos, [self.serving_counter_pos])
+        near_chopping_board   = self._nearest_item(chef_pos, self.chopping_board_pos)
 
-        for i, key in enumerate(["servingCounter", "fishBox", "shrimpBox"]):
-            if game_state[key] is not None:
-                obs[18 + 2 * i] = game_state[key][0]
-                obs[18 + 2 * i + 1] = game_state[key][1]
+        # 4. What items exist on the counter
+        has_fish       = len(game_state["fish"])      > 0
+        has_shrimp     = len(game_state["shrimp"])    > 0
+        has_cut_fish   = len(game_state["cutFish"])   > 0
+        has_cut_shrimp = len(game_state["cutShrimp"]) > 0
+        has_plate      = len(game_state["plates"])    > 0
 
-        return obs
+        # 5. Current order from template matching: 0=none, 1=fish, 2=shrimp
+        # comes from order passed in
+
+        return (
+            gx, gy,
+            held,
+            int(near_fishbox), int(near_shrimpbox), int(near_serving), int(near_chopping_board),
+            int(has_fish), int(has_shrimp),
+            int(has_cut_fish), int(has_cut_shrimp),
+            int(has_plate),
+            order,
+        )
+    
+
+    # ------------------------------------------------------------------
+    # Next order tracking
+    # ------------------------------------------------------------------
+
+    def _detect_order(self):
+        # INPUT REAL COORDINATES
+        order_region = {"top": 0, "left": 8, "width": 116, "height": 140}  # tune these coords
+        screenshot = self.sct.grab(order_region)
+        frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2GRAY)
+
+        best_label = 0  # 0 = no order detected
+        best_score = 0.6
+
+        for label, path in [(1, "templates/fish_order.png"), (2, "templates/shrimp_order.png")]:
+            template = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            if template is None:
+                continue
+            result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_score = max_val
+                best_label = label
+
+        return best_label  # 0=none, 1=fish, 2=shrimp
 
     # ------------------------------------------------------------------
     # Held-item tracking
@@ -215,7 +285,7 @@ class OvercookedEnv(gym.Env):
         # Serving: PICKUP/SETDOWN near the detected serving counter
         # while a processed ingredient disappears from the scene
         if action == ACTION_PICKUP and curr_state["chef"] is not None:
-            serving_pos = curr_state["servingCounter"]
+            serving_pos = self.serving_counter_pos
             if serving_pos is not None:
                 chef_pos = curr_state["chef"]
                 dist = (
@@ -241,7 +311,8 @@ class OvercookedEnv(gym.Env):
         frame = self._capture_frame()
         detections = self._detect_objects(frame)
         self.prev_state = self._build_game_state(detections)
-        obs = self._encode_state(self.prev_state)
+        order = self._detect_order()
+        obs = self._encode_state(self.prev_state, order)
 
         return obs, {}
 
@@ -255,7 +326,8 @@ class OvercookedEnv(gym.Env):
         curr_state = self._build_game_state(detections)
 
         self._update_held_item(action, self.prev_state)
-        obs = self._encode_state(curr_state)
+        order = self._detect_order()
+        obs = self._encode_state(curr_state, order)
         reward = self._compute_reward(self.prev_state, curr_state, action)
         self.prev_state = curr_state
 
