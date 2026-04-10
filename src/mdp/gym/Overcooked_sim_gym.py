@@ -141,7 +141,7 @@ class OvercookedSimEnv(gym.Env):
         self.chef_row, self.chef_col = self._spawn_cells[0]
         self.chef_facing = ACTION_DOWN
         self.held_item = HOLD_NONE
-        self.plate_has_ingredient = HOLD_NONE
+        self.plate_ingredient = HOLD_NONE
 
         self.order = np.random.choice(["cutFish", "cutShrimp"])
 
@@ -167,7 +167,7 @@ class OvercookedSimEnv(gym.Env):
             events = self._try_move(_FACING_TO_DIR[action])
 
         reward = self._compute_reward(events)
-        terminated = False
+        terminated = events.get("served", False)
         truncated = self.step_count >= self.max_steps
 
         if self.render_mode == "human":
@@ -396,6 +396,10 @@ class OvercookedSimEnv(gym.Env):
             reward += 20.0
         if events.get("bad_serve"):
             reward += -3.0
+        if events.get("ingredient"):
+            reward += 0.2
+        if self.held_item != HOLD_NONE:
+            reward += 0.01
         return reward
 
     # Observation Encoding
