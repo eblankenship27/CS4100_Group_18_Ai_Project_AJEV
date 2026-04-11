@@ -164,7 +164,8 @@ class OvercookedSimEnv(gym.Env):
         elif action == ACTION_PICKUP:
             events = self._try_pickup_or_putdown()
         else:
-            events = self._try_move(_FACING_TO_DIR[action])
+            dr, dc = _FACING_TO_DIR[action]
+            events = self._try_move(dr, dc)
 
         reward = self._compute_reward(events)
         terminated = events.get("served", False)
@@ -334,7 +335,7 @@ class OvercookedSimEnv(gym.Env):
                             'type': 'plate',
                             'row': r,
                             'col': c,
-                            'holds': _HOLD_NAMES[item['type']]
+                            'holds': item['type']
                         })
                         self.held_item = HOLD_NONE
 
