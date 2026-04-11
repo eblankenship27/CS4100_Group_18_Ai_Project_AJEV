@@ -116,7 +116,7 @@ class OvercookedSimEnv(gym.Env):
                     self._static_positions["plate_shelf"] = (nx, ny)
                     self._plate_shelf_cell = (r, c)
 
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(28,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(36,), dtype=np.float32)
         self.action_space = spaces.Discrete(6)
 
         self.chef_row = self._spawn_cells[0][0]
@@ -125,11 +125,11 @@ class OvercookedSimEnv(gym.Env):
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
         self.world_items = [
-            {"type": "plate", "row": 4, "col": 4},
-            {"type": "plate", "row": 4, "col": 3},
-            {"type": "plate", "row": 4, "col": 8},
-            {"type": "plate", "row": 4, "col": 9},
-        ]  # list of {"type": str, "row": int, "col": int}
+            {"type": "plate", "row": 4, "col": 4, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 3, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 8, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 9, "holds": "nothing"},
+        ]  # list of {"type": str, "row": int, "col": int, "holds": str}
         self.order = np.random.choice([
             'cutFish', 'cutShrimp'
         ])
@@ -142,6 +142,12 @@ class OvercookedSimEnv(gym.Env):
         self.chef_facing = ACTION_DOWN
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
+        self.world_items = [
+            {"type": "plate", "row": 4, "col": 4, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 3, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 8, "holds": "nothing"},
+            {"type": "plate", "row": 4, "col": 9, "holds": "nothing"},
+        ]
 
         self.order = np.random.choice(["cutFish", "cutShrimp"])
 
@@ -225,6 +231,7 @@ class OvercookedSimEnv(gym.Env):
                             'type': _HOLD_NAMES[HOLD_CUTFISH if item['type'] == 'fish' else HOLD_CUTSHRIMP],
                             'row': item['row'],
                             'col': item['col'],
+                            'holds': 'nothing',
                         })
                         return {"chopped": True}
         return {}
@@ -362,6 +369,8 @@ class OvercookedSimEnv(gym.Env):
             for item in self.world_items:
                 if item['row'] == r and item['col'] == c:
                     self.held_item = _NAME_TO_HOLD[item['type']]
+                    if item['type'] == 'plate':
+                        self.plate_ingredient = _NAME_TO_HOLD.get(item.get('holds', 'nothing'), HOLD_NONE)
                     self.world_items.remove(item)
                     return {}
 
@@ -407,7 +416,7 @@ class OvercookedSimEnv(gym.Env):
 
     def _encode_obs(self) -> np.ndarray:
         # Encode the current observation state into an array for state handling
-        obs = np.full(28, -1.0, dtype=np.float32)
+        obs = np.full(36, -1.0, dtype=np.float32)
 
         # [0-1] Chef Position
         obs[0] = self.chef_col / (self.GRID_COLS - 1)
@@ -438,6 +447,13 @@ class OvercookedSimEnv(gym.Env):
 
         # [24-27] Player facing
         obs[24 + self.chef_facing] = 1.0
+
+        # [28-29] Current order one-hot (0=cutFish, 1=cutShrimp)
+        order_idx = 0 if self.order == "cutFish" else 1
+        obs[28 + order_idx] = 1.0
+
+        # [30-35] Plate ingredient one-hot (same encoding as held item)
+        obs[30 + self.plate_ingredient] = 1.0
 
         return obs
 

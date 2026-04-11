@@ -2,8 +2,43 @@ from collections import defaultdict
 
 import numpy as np
 import gymnasium as gym
-
+import pickle
 import os
+
+
+def hash_obs(obs):
+    """Discretize a 36-float observation into a compact tuple state key.
+
+    Identical to the hash_obs used in train_script.py so that Q-tables
+    produced by either training path share the same state representation
+    and can be loaded interchangeably.
+    """
+    o = obs
+
+    x = int(o[0] * 5)
+    y = int(o[1] * 5)
+
+    held    = int(np.argmax(o[2:8]))
+    facing  = int(np.argmax(o[24:28]))
+
+    # obs[8-9]  = first plate position
+    # obs[10-11]= first fish position
+    plate_x = int(o[8]  * 5) if o[8]  >= 0 else -1
+    plate_y = int(o[9]  * 5) if o[9]  >= 0 else -1
+    fish_x  = int(o[10] * 5) if o[10] >= 0 else -1
+    fish_y  = int(o[11] * 5) if o[11] >= 0 else -1
+
+    # obs[28-29]: order one-hot (index 0=cutFish, 1=cutShrimp)
+    # If both are negative the order is undetected (mdp_gym only) → use -1
+    # to avoid aliasing with cutFish.
+    order_slice = o[28:30]
+    order = int(np.argmax(order_slice)) if np.max(order_slice) > 0 else -1
+
+    # obs[30-35]: plate ingredient one-hot (same 6-way encoding as held item)
+    plate_ing = int(np.argmax(o[30:36]))
+
+    return x, y, held, facing, plate_x, plate_y, fish_x, fish_y, order, plate_ing
+
 
 class OvercookedAgent:
     def __init__(self, env: gym.Env, initial_epsilon: float, decay_rate: float, final_epsilon: float, discount_factor: float = 0.99):
@@ -72,23 +107,29 @@ class OvercookedAgent:
     def save(self, filename, update_filename):
         """Merges current Q-values into an existing save file, or creates one if none exists."""
         if os.path.exists(filename):
-            saved = np.load(filename, allow_pickle=True).item()
+            with open(filename, 'rb') as f:
+                saved = pickle.load(f)
             saved.update(dict(self.q_table))
         else:
             saved = dict(self.q_table)
-        np.save(filename, saved)
-        
+        with open(filename, 'wb') as f:
+            pickle.dump(saved, f)
+
         if os.path.exists(update_filename):
-            u_saved = np.load(update_filename, allow_pickle=True).item()
+            with open(update_filename, 'rb') as f:
+                u_saved = pickle.load(f)
             u_saved.update(dict(self.update_counts))
         else:
             u_saved = dict(self.update_counts)
-        np.save(update_filename, u_saved)
+        with open(update_filename, 'wb') as f:
+            pickle.dump(u_saved, f)
 
     def load(self, q_filename, update_filename):
         """Loads a previously saved Q-table from a file."""
-        saved = np.load(q_filename, allow_pickle=True).item()
-        saved_updates = np.load(update_filename, allow_pickle=True).item()
+        with open(q_filename, 'rb') as f:
+            saved = pickle.load(f)
+        with open(update_filename, 'rb') as f:
+            saved_updates = pickle.load(f)
         self.q_table = defaultdict(lambda: np.zeros(self.env.action_space.n), saved)
         self.update_counts = defaultdict(lambda: np.zeros(self.env.action_space.n), saved_updates)
 
@@ -135,19 +176,19 @@ def run_training(
 
     for episode in range(1, n_episodes + 1):
         obs, _ = env.reset()
-        state = tuple(obs)
+        state_id = hash_obs(obs)
         total_reward = 0.0
         terminated = False
         truncated = False
 
         while not (terminated or truncated):
-            action = agent.select_action(state)
+            action = agent.select_action(state_id)
             next_obs, reward, terminated, truncated, _ = env.step(action)
-            next_state = tuple(next_obs)
+            next_state_id = hash_obs(next_obs)
 
-            agent.update(state, action, reward, terminated, next_state)
+            agent.update(state_id, action, reward, terminated, next_state_id)
 
-            state = next_state
+            state_id = next_state_id
             total_reward += reward
 
         # Decay epsilon after each episode

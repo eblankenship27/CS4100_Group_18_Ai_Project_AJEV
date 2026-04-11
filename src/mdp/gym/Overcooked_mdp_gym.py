@@ -42,9 +42,29 @@ KEYMAP = {
     ACTION_PICKUP: 'space'
 }
 
+# statoinary objects
+STATIC_STATIONS = {
+    "choppingBoards": [(396, 717), (505, 717), (1390, 717), (1502, 717)],
+    "servingCounter": (1460, 373),
+    "fishBox":        (414, 502),
+    "shrimpBox":      (1500, 590),
+}
+
+# kitchen bounds
+# [200:665, 400:1500]
+KITCHEN_TOP = 200
+KITCHEN_BOTTOM = 665
+KITCHEN_LEFT = 400
+KITCHEN_RIGHT = 1500
+
 
 class OvercookedEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 10}
+    
+    def _normalize(self, px, py):
+        nx = (px - self.monitor["left"]) / self.monitor["width"]
+        ny = (py - self.monitor["top"])  / self.monitor["height"]
+        return (nx, ny)
 
     def __init__(
             self,
@@ -72,12 +92,18 @@ class OvercookedEnv(gym.Env):
         self._manual_fish_box_pos = fish_box_pos
         self._manual_shrimp_box_pos = shrimp_box_pos
 
-        # Set up the
+        # Set up the OpenCV screen and object detection model
         self.model = YOLO(model_path)
         self.sct = mss.mss()
         self.monitor = {"top": 200, "left": 0, "width": 600, "height": 400}
 
         w, h = self.monitor["width"], self.monitor["height"]
+
+        self._static_positions = {
+            "servingCounter": None,
+            "fishBox": None,
+            "shrimpBox": None,
+        }
 
         if self._manual_serving_pos is not None:
             self._static_positions["servingCounter"] = (
@@ -100,7 +126,7 @@ class OvercookedEnv(gym.Env):
         self.actions = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'CHOP', 'PICKUP']
         self.action_space = spaces.Discrete(len(self.actions))
 
-        # Continuous state observations hashed into 24-float observation vector:
+        # 36-float observation vector:
         # [0-1]   chef (x, y)
         # [2-7]   one-hot: held item (none/plate/fish/shrimp/cutFish/cutShrimp)
         # [8-9]   first plate center
@@ -108,20 +134,26 @@ class OvercookedEnv(gym.Env):
         # [12-13] first shrimp center
         # [14-15] first cutFish center
         # [16-17] first cutShrimp center
-        # [18-19] serving counter center (from YOLO class 6)
-        # [20-21] fish box center (from YOLO class 7)
-        # [22-23] shrimp box center (from YOLO class 8)
+        # [18-19] serving counter center
+        # [20-21] fish box center
+        # [22-23] shrimp box center
+        # [24-27] one-hot chef facing (up/down/left/right)
+        # [28-29] one-hot current order (0=cutFish, 1=cutShrimp); -1 if undetected
+        # [30-35] one-hot plate ingredient (same encoding as held item)
+        #
         # Undetected objects default to (-1, -1)
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(28,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(36,), dtype=np.float32
         )
+        
+        self.serving_counter_pos  = self._normalize(*STATIC_STATIONS["servingCounter"])
+        self.fish_box_pos         = self._normalize(*STATIC_STATIONS["fishBox"])
+        self.shrimp_box_pos       = self._normalize(*STATIC_STATIONS["shrimpBox"])
+        self.chopping_board_pos   = [self._normalize(*p) for p in STATIC_STATIONS["choppingBoards"]]
 
-        # TODO: Implement hard coded 'static values' such as the fish box
-        self._static_positions = {
-            "servingCounter": None,
-            "fishBox": None,
-            "shrimpBox": None,
-        }
+        # Normalize kitchen bounds
+        self.kitchen_left,  self.kitchen_top    = self._normalize(KITCHEN_LEFT,  KITCHEN_TOP)
+        self.kitchen_right, self.kitchen_bottom = self._normalize(KITCHEN_RIGHT, KITCHEN_BOTTOM)
 
         # TODO: Implement the chef facing values
 
@@ -129,6 +161,7 @@ class OvercookedEnv(gym.Env):
         self.step_count = 0
         self.prev_state = None
         self.held_item = HOLD_NONE
+        self.plate_ingredient = HOLD_NONE
 
         # Statistics for chef timings and coordinates
         self.move_duration = 0.05
@@ -215,29 +248,62 @@ class OvercookedEnv(gym.Env):
 
         return state
 
-    def _encode_state(self, game_state):
-        obs = np.full(28, -1.0, dtype=np.float32)
-
-        # TODO: Add Chef facing information (could have it based on the last movement)
+    def _encode_state(self, game_state, order):
+        obs = np.full(36, -1.0, dtype=np.float32)
 
         if game_state["chef"] is not None:
             obs[0], obs[1] = game_state["chef"]
 
+        # [2-7] held item one-hot
         obs[2 + self.held_item] = 1.0
 
+        # [8-17] first detected instance of each dynamic object type
         for i, key in enumerate(["plates", "fish", "shrimp", "cutFish", "cutShrimp"]):
             if game_state[key]:
                 obs[8 + 2 * i] = game_state[key][0][0]
                 obs[8 + 2 * i + 1] = game_state[key][0][1]
 
+        # [18-23] static station positions
         for i, key in enumerate(["servingCounter", "fishBox", "shrimpBox"]):
             if game_state[key] is not None:
                 obs[18 + 2 * i] = game_state[key][0]
                 obs[18 + 2 * i + 1] = game_state[key][1]
 
+        # [24-27] chef facing one-hot
         obs[24 + self.chef_facing] = 1.0
 
+        # [28-29] order one-hot; _detect_order returns 0=none, 1=cutFish, 2=cutShrimp
+        if order == 1:
+            obs[28] = 1.0
+        elif order == 2:
+            obs[29] = 1.0
+
+        # [30-35] plate ingredient one-hot (same encoding as held item)
+        obs[30 + self.plate_ingredient] = 1.0
+
         return obs
+    
+    def _detect_order(self):
+        order_region = {
+            "top": 0, "left": 8, "width": 116, "height": 140
+        }
+        screenshot = self.sct.grab(order_region)
+        frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2GRAY)
+        
+        best_label = 0  # 0 = no order detected
+        best_score = 0.6
+        
+        for label, path in [(1, "templates/fish_order.png"), (2, "templates/shrimp_order.png")]:
+            template = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            if template is None:
+                continue
+            result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_score = max_val
+                best_label = label
+        
+        return best_label  # 0=none, 1=fish, 2=shrimp
 
     # ------------------------------------------------------------------
     # Held-item tracking
@@ -258,6 +324,7 @@ class OvercookedEnv(gym.Env):
             return
         if self.held_item != HOLD_NONE:
             self.held_item = HOLD_NONE
+            self.plate_ingredient = HOLD_NONE
             return
         chef_pos = prev_state["chef"]
         if chef_pos is None:
@@ -272,6 +339,14 @@ class OvercookedEnv(gym.Env):
         ]:
             if self._nearest_item(chef_pos, prev_state[key]):
                 self.held_item = hold_idx
+                if hold_idx == HOLD_PLATE:
+                    # Infer plate ingredient from nearby cut food (food sitting on the plate)
+                    if self._nearest_item(chef_pos, prev_state["cutFish"]):
+                        self.plate_ingredient = HOLD_CUTFISH
+                    elif self._nearest_item(chef_pos, prev_state["cutShrimp"]):
+                        self.plate_ingredient = HOLD_CUTSHRIMP
+                    else:
+                        self.plate_ingredient = HOLD_NONE
                 return
 
     # ------------------------------------------------------------------
@@ -289,7 +364,7 @@ class OvercookedEnv(gym.Env):
         # Serving: PICKUP/SETDOWN near the detected serving counter
         # while a processed ingredient disappears from the scene
         if action == ACTION_PICKUP and curr_state["chef"] is not None:
-            serving_pos = curr_state["servingCounter"]
+            serving_pos = self.serving_counter_pos
             if serving_pos is not None:
                 chef_pos = curr_state["chef"]
                 dist = (
@@ -309,13 +384,15 @@ class OvercookedEnv(gym.Env):
         super().reset(seed=seed)
         self.step_count = 0
         self.held_item = HOLD_NONE
+        self.plate_ingredient = HOLD_NONE
 
         # TODO: Need to somehow call the game to reset? or should this get called when the game is reset?
 
         frame = self._capture_frame()
         detections = self._detect_objects(frame)
         self.prev_state = self._build_game_state(detections)
-        obs = self._encode_state(self.prev_state)
+        order = self._detect_order()
+        obs = self._encode_state(self.prev_state, order)
 
         return obs, {}
 
@@ -329,7 +406,8 @@ class OvercookedEnv(gym.Env):
         curr_state = self._build_game_state(detections)
 
         self._update_held_item(action, self.prev_state)
-        obs = self._encode_state(curr_state)
+        order = self._detect_order()
+        obs = self._encode_state(curr_state, order)
         reward = self._compute_reward(self.prev_state, curr_state, action)
         self.prev_state = curr_state
 
