@@ -20,29 +20,39 @@ else:
 def hash_obs(obs):
     o = obs
 
-    x = int(o[0] * 5)
-    y = int(o[1] * 5)
+    x = int(o[0] * 12)
+    y = int(o[1] * 8)
 
     held = int(np.argmax(o[2:8]))
-    facing = int(np.argmax(o[24:28]))
+    facing = int(np.argmax(o[18:22]))
 
     # obs[8-9] = first plate, obs[10-11] = first fish
-    plate_x = int(o[8] * 5) if o[8] >= 0 else -1
-    plate_y = int(o[9] * 5) if o[9] >= 0 else -1
+    plate_x = int(o[8] * 12) if o[8] >= 0 else -1
+    plate_y = int(o[9] * 8) if o[9] >= 0 else -1
 
-    fish_x = int(o[10] * 5) if o[10] >= 0 else -1
-    fish_y = int(o[11] * 5) if o[11] >= 0 else -1
+    fish_x = int(o[10] * 12) if o[10] >= 0 else -1
+    fish_y = int(o[11] * 8) if o[11] >= 0 else -1
+    
+    shrimp_x = int(o[12] * 12) if o[12] >= 0 else -1
+    shrimp_y = int(o[13] * 8) if o[13] >= 0 else -1
+    
+    cutFish_x = int(o[14] * 12) if o[14] >= 0 else -1
+    cutFish_y = int(o[15] * 8) if o[15] >= 0 else -1
+    
+    cutShrimp_x = int(o[16] * 12) if o[16] >= 0 else -1
+    cutShrimp_y = int(o[17] * 8) if o[17] >= 0 else -1
+    
 
-    # obs[28-29] = order one-hot (0=cutFish, 1=cutShrimp)
+    # obs[22-23] = order one-hot (0=cutFish, 1=cutShrimp)
     # If both are negative the order is undetected (mdp_gym only) → use -1
     # to avoid aliasing with cutFish.
-    order_slice = o[28:30]
+    order_slice = o[22:24]
     order = int(np.argmax(order_slice)) if np.max(order_slice) > 0 else -1
 
-    # obs[30-35] = plate ingredient one-hot
-    plate_ing = int(np.argmax(o[30:36]))
+    # obs[24-29] = plate ingredient one-hot
+    plate_ing = int(np.argmax(o[24:30]))
 
-    return x, y, held, facing, plate_x, plate_y, fish_x, fish_y, order, plate_ing
+    return x, y, held, facing, plate_x, plate_y, fish_x, fish_y, shrimp_x, shrimp_y, cutFish_x, cutFish_y, cutShrimp_x, cutShrimp_y, order, plate_ing
 
 
 # Q-Learning
@@ -106,11 +116,23 @@ def Q_learning(num_episodes=5000, gamma=0.9, epsilon=1.0, decay_rate=0.995,
 
 # Parameters
 num_episodes = 1000000
-decay_rate = 0.997
+decay_rate = 0.999997
+'''
+Purpose	    num_episodes	decay_rate	Final ε	Notes
+Smoke test	5_000	        0.9994	    ~0.05	Just verify it learns at all
+Light run	50_000	        0.99994	    ~0.05	Usable policy, fast
+Solid run	200_000	        0.999985	~0.05	Good balance — recommended starting point
+Full training500_000	    0.999994	~0.05	Strong policy
+Max	        1_000_000	    0.999997	~0.05	Diminishing returns past here
+'''
+
 
 filename        = f"Q_table_{num_episodes}_{decay_rate}.pickle"
 update_filename = f"update_table_{num_episodes}_{decay_rate}.pickle"
 
+def softmax(x, temp=1.0):
+	e_x = np.exp((x - np.max(x)) / temp)
+	return e_x / e_x.sum(axis=0)
 
 # Training Mode
 if train_flag:
@@ -171,7 +193,7 @@ else:
             total_steps += 1
 
             if state in Q_table:
-                action = np.argmax(Q_table[state])
+                action = np.random.choice(env.action_space.n, p=softmax(Q_table[state]))  # Select action using softmax over Q-values
             else:
                 action = env.action_space.sample()
 

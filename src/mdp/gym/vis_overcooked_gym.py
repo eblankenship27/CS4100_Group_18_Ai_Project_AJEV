@@ -273,25 +273,25 @@ def _draw_console():
     pygame.draw.line(screen, DARK_GRAY, (x, y), (x + CONSOLE_WIDTH - 24, y), 1)
     y += 10
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    screen.blit(font_info.render("Controls:", True, BLUE), (x, y))
-    y += 24
-    controls = [
-        "W / \u2191      Move Up",
-        "S / \u2193      Move Down",
-        "A / \u2190      Move Left",
-        "D / \u2192      Move Right",
-        "C            Chop",
-        "E / Space    Pickup / Put-down",
-        "R            Reset",
-    ]
-    for ctrl in controls:
-        screen.blit(font_small.render(ctrl, True, DARK_GRAY), (x, y))
-        y += 20
+    # # ── Controls ──────────────────────────────────────────────────────────────
+    # screen.blit(font_info.render("Controls:", True, BLUE), (x, y))
+    # y += 24
+    # controls = [
+    #     "W / \u2191      Move Up",
+    #     "S / \u2193      Move Down",
+    #     "A / \u2190      Move Left",
+    #     "D / \u2192      Move Right",
+    #     "C            Chop",
+    #     "E / Space    Pickup / Put-down",
+    #     "R            Reset",
+    # ]
+    # for ctrl in controls:
+    #     screen.blit(font_small.render(ctrl, True, DARK_GRAY), (x, y))
+    #     y += 20
 
-    y += 6
-    pygame.draw.line(screen, DARK_GRAY, (x, y), (x + CONSOLE_WIDTH - 24, y), 1)
-    y += 10
+    # y += 6
+    # pygame.draw.line(screen, DARK_GRAY, (x, y), (x + CONSOLE_WIDTH - 24, y), 1)
+    # y += 10
 
     # ── Action log ────────────────────────────────────────────────────────────
     screen.blit(font_info.render("Recent Actions:", True, BLUE), (x, y))
@@ -380,6 +380,7 @@ def main():
                     game_ended = False
                     action_log.append("─── RESET ───")
                 elif not game_ended:
+                    game_ended = False
                     if   event.key in (pygame.K_w, pygame.K_UP):    action = ACTION_UP
                     elif event.key in (pygame.K_s, pygame.K_DOWN):  action = ACTION_DOWN
                     elif event.key in (pygame.K_a, pygame.K_LEFT):  action = ACTION_LEFT
@@ -444,9 +445,9 @@ def refresh(obs, reward: float, terminated: bool, truncated: bool,
 
     _draw_frame()
 
-    if game_ended:
-        served = terminated  # truncated means timeout, not a serve
-        _overlay_end(served)
+    # if game_ended:
+    #     served = terminated  # truncated means timeout, not a serve
+    #     _overlay_end(served)
 
     clock.tick(60)
     time.sleep(delay)

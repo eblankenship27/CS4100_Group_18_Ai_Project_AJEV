@@ -126,7 +126,7 @@ class OvercookedEnv(gym.Env):
         self.actions = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'CHOP', 'PICKUP']
         self.action_space = spaces.Discrete(len(self.actions))
 
-        # 36-float observation vector:
+        # 30-float observation vector:
         # [0-1]   chef (x, y)
         # [2-7]   one-hot: held item (none/plate/fish/shrimp/cutFish/cutShrimp)
         # [8-9]   first plate center
@@ -134,16 +134,13 @@ class OvercookedEnv(gym.Env):
         # [12-13] first shrimp center
         # [14-15] first cutFish center
         # [16-17] first cutShrimp center
-        # [18-19] serving counter center
-        # [20-21] fish box center
-        # [22-23] shrimp box center
-        # [24-27] one-hot chef facing (up/down/left/right)
-        # [28-29] one-hot current order (0=cutFish, 1=cutShrimp); -1 if undetected
-        # [30-35] one-hot plate ingredient (same encoding as held item)
+        # [18-21] one-hot chef facing (up/down/left/right)
+        # [22-23] one-hot current order (0=cutFish, 1=cutShrimp); -1 if undetected
+        # [24-29] one-hot plate ingredient (same encoding as held item)
         #
         # Undetected objects default to (-1, -1)
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(36,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(30,), dtype=np.float32
         )
         
         self.serving_counter_pos  = self._normalize(*STATIC_STATIONS["servingCounter"])
@@ -249,7 +246,7 @@ class OvercookedEnv(gym.Env):
         return state
 
     def _encode_state(self, game_state, order):
-        obs = np.full(36, -1.0, dtype=np.float32)
+        obs = np.full(30, -1.0, dtype=np.float32)
 
         if game_state["chef"] is not None:
             obs[0], obs[1] = game_state["chef"]
@@ -263,23 +260,17 @@ class OvercookedEnv(gym.Env):
                 obs[8 + 2 * i] = game_state[key][0][0]
                 obs[8 + 2 * i + 1] = game_state[key][0][1]
 
-        # [18-23] static station positions
-        for i, key in enumerate(["servingCounter", "fishBox", "shrimpBox"]):
-            if game_state[key] is not None:
-                obs[18 + 2 * i] = game_state[key][0]
-                obs[18 + 2 * i + 1] = game_state[key][1]
+        # [18-21] chef facing one-hot
+        obs[18 + self.chef_facing] = 1.0
 
-        # [24-27] chef facing one-hot
-        obs[24 + self.chef_facing] = 1.0
-
-        # [28-29] order one-hot; _detect_order returns 0=none, 1=cutFish, 2=cutShrimp
+        # [22-23] order one-hot; _detect_order returns 0=none, 1=cutFish, 2=cutShrimp
         if order == 1:
-            obs[28] = 1.0
+            obs[22] = 1.0
         elif order == 2:
-            obs[29] = 1.0
+            obs[23] = 1.0
 
-        # [30-35] plate ingredient one-hot (same encoding as held item)
-        obs[30 + self.plate_ingredient] = 1.0
+        # [24-29] plate ingredient one-hot (same encoding as held item)
+        obs[24 + self.plate_ingredient] = 1.0
 
         return obs
     

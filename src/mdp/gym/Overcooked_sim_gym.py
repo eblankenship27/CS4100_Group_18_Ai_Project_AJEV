@@ -96,7 +96,7 @@ class OvercookedSimEnv(gym.Env):
         self._serving_cells = []
         self._cutting_board_cells = []
         self._plate_shelf_cell = None
-        self._spawn_cells = [(3, 2), (9, 2)]
+        self._spawn_cells = [(3, 4), (3, 9)]
 
         for r, row in enumerate(self.layout):
             for c, tile in enumerate(row):
@@ -116,7 +116,7 @@ class OvercookedSimEnv(gym.Env):
                     self._static_positions["plate_shelf"] = (nx, ny)
                     self._plate_shelf_cell = (r, c)
 
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(36,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(30,), dtype=np.float32)
         self.action_space = spaces.Discrete(6)
 
         self.chef_row = self._spawn_cells[0][0]
@@ -134,6 +134,8 @@ class OvercookedSimEnv(gym.Env):
             'cutFish', 'cutShrimp'
         ])
         self.step_count = 0
+        self._plated_pickup_rewarded = False
+        self._board_reward_given = False
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -150,6 +152,8 @@ class OvercookedSimEnv(gym.Env):
         ]
 
         self.order = np.random.choice(["cutFish", "cutShrimp"])
+        self._plated_pickup_rewarded = False
+        self._board_reward_given = False
 
         if self.render_mode == "human":
             self.render()
@@ -160,6 +164,13 @@ class OvercookedSimEnv(gym.Env):
         self.step_count += 1
 
         # TODO: implement plate shelf to continously replace the plates
+
+        # Record serving distance before the action for potential-based shaping
+        carrying_plated = (
+            self.held_item == HOLD_PLATE and
+            self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)
+        )
+        pre_dist = self._serving_dist() if carrying_plated else None
 
         events = {}
 
@@ -174,7 +185,19 @@ class OvercookedSimEnv(gym.Env):
             events = self._try_move(dr, dc)
 
         reward = self._compute_reward(events)
-        terminated = events.get("served", False)
+
+        # Potential-based shaping: reward each step closer to the serving counter
+        # while continuously carrying the correctly plated dish
+        if pre_dist is not None and not events.get("served"):
+            still_carrying = (
+                self.held_item == HOLD_PLATE and
+                self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)
+            )
+            if still_carrying:
+                reward += (pre_dist - self._serving_dist()) * 0.15
+
+        # terminated = events.get("served", False)
+        terminated = False  # never terminate episodes on the environment side since we want to train on time-extended rewards
         truncated = self.step_count >= self.max_steps
 
         if self.render_mode == "human":
@@ -215,17 +238,16 @@ class OvercookedSimEnv(gym.Env):
 
     def _try_chop(self) -> dict:
         # Define the action of the agent trying to chop an item at a cutting board
-
-        # TODO: Implement plate shelf where you can't place things on it?
-
         cell = self._facing_cell()
         if cell is None:
-            return {}
+            return {'invalid': True}
         fr, fc = cell
         for item in self.world_items:
             if item['type'] in ('fish', 'shrimp') and item['row'] == fr and item['col'] == fc:
                 for br, bc in self._cutting_board_cells:
                     if br == fr and bc == fc:
+                        correct = (item['type'] == 'fish'   and self.order == 'cutFish') or \
+                                  (item['type'] == 'shrimp' and self.order == 'cutShrimp')
                         self.world_items.remove(item)
                         self.world_items.append({
                             'type': _HOLD_NAMES[HOLD_CUTFISH if item['type'] == 'fish' else HOLD_CUTSHRIMP],
@@ -233,8 +255,8 @@ class OvercookedSimEnv(gym.Env):
                             'col': item['col'],
                             'holds': 'nothing',
                         })
-                        return {"chopped": True}
-        return {}
+                        return {'chopped': True, 'chopped_correct': correct}
+        return {'invalid': True}
 
     def _try_pickup_or_putdown(self) -> dict:
 
@@ -243,23 +265,24 @@ class OvercookedSimEnv(gym.Env):
         # Get the cell the agent is facing
         cell = self._facing_cell()
         if cell is None:
-            return {}
+            return {'invalid': True}
         r, c = cell
 
         if self.layout[r][c] == TILE_PLATE_SHELF:
-            return {}
+            return {'invalid': True}
 
         if self.held_item == HOLD_PLATE and self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP):
             if self.layout[r][c] == TILE_SERVING:
-                # If served with a plate and a cut food on the plate then should serve and remove the item
+                # Served with a plated cut ingredient — complete the order
                 self.held_item = HOLD_NONE
                 self.plate_ingredient = HOLD_NONE
                 self.order = np.random.choice(['cutFish', 'cutShrimp'])
+                self._plated_pickup_rewarded = False
                 return {"served": True}
 
             for item in self.world_items:
                 if item['row'] == r and item['col'] == c:
-                    return {}
+                    return {'invalid': True}  # put-down blocked by existing item
 
             self.world_items.append({
                 'type': _HOLD_NAMES[self.held_item],
@@ -273,16 +296,18 @@ class OvercookedSimEnv(gym.Env):
 
         if self.held_item in (HOLD_CUTFISH, HOLD_CUTSHRIMP):
             if self.layout[r][c] == TILE_SERVING:
-                # If served without a plate, should remove the item but not serve
+                # Served without a plate
                 self.held_item = HOLD_NONE
                 return {'bad_serve': True}
 
-            # Check each item
             for item in self.world_items:
-                # If there is a item at the facing cell
                 if item['row'] == r and item['col'] == c:
-                    # If is a plate, put on the plate
                     if item['type'] == 'plate' and item['holds'] == 'nothing':
+                        # Place cut ingredient onto empty plate
+                        correct = (
+                            (self.held_item == HOLD_CUTFISH   and self.order == 'cutFish') or
+                            (self.held_item == HOLD_CUTSHRIMP and self.order == 'cutShrimp')
+                        )
                         self.world_items.remove(item)
                         self.world_items.append({
                             'type': 'plate',
@@ -291,8 +316,9 @@ class OvercookedSimEnv(gym.Env):
                             'holds': _HOLD_NAMES[self.held_item]
                         })
                         self.held_item = HOLD_NONE
-                    # Else return, as you can't put it down
-                    return {}
+                        return {'plated_correct': True} if correct else {'plated_wrong': True}
+                    return {'invalid': True}  # blocked by incompatible item
+
             self.world_items.append({
                 'type': _HOLD_NAMES[self.held_item],
                 'row': r,
@@ -303,19 +329,14 @@ class OvercookedSimEnv(gym.Env):
             return {}
 
         if self.held_item in (HOLD_FISH, HOLD_SHRIMP):
-            # If holding a unprepped food and put on plate, do nothing
-            # If holding a unprepped food and put on serve, get rid of food but not complete order
             if self.layout[r][c] == TILE_SERVING:
-                # If served unprepped, should remove the item but not serve
                 self.held_item = HOLD_NONE
                 return {'bad_serve': True}
 
-            # If holding unprepped food and try to place on another item, do nothing
             for item in self.world_items:
                 if item['row'] == r and item['col'] == c:
-                    return {}
+                    return {'invalid': True}  # blocked
 
-            # If no items in facing cell, place held item
             self.world_items.append({
                 'type': _HOLD_NAMES[self.held_item],
                 'row': r,
@@ -323,20 +344,22 @@ class OvercookedSimEnv(gym.Env):
                 'holds': _HOLD_NAMES[HOLD_NONE]
             })
             self.held_item = HOLD_NONE
-            return {}
-        # If hold plate and pick up food, the plate gets put down on the food,
+            on_board = any(br == r and bc == c for br, bc in self._cutting_board_cells)
+            return {'placed_on_board': True} if on_board else {}
 
         if self.held_item == HOLD_PLATE:
-
             if self.layout[r][c] == TILE_SERVING:
-                # If served just plate, should remove the item but not serve
                 self.held_item = HOLD_NONE
                 return {'bad_serve': True}
 
             for item in self.world_items:
                 if item['row'] == r and item['col'] == c:
                     if item['type'] in (_HOLD_NAMES[HOLD_CUTFISH], _HOLD_NAMES[HOLD_CUTSHRIMP]):
-                        # If placing plate on prepped food, them create place with prepped food
+                        # Place plate onto cut ingredient
+                        correct = (
+                            (item['type'] == 'cutFish'   and self.order == 'cutFish') or
+                            (item['type'] == 'cutShrimp' and self.order == 'cutShrimp')
+                        )
                         self.world_items.remove(item)
                         self.world_items.append({
                             'type': 'plate',
@@ -345,8 +368,8 @@ class OvercookedSimEnv(gym.Env):
                             'holds': item['type']
                         })
                         self.held_item = HOLD_NONE
-
-                    return {}
+                        return {'plated_correct': True} if correct else {'plated_wrong': True}
+                    return {'invalid': True}  # blocked by incompatible item
 
             self.world_items.append({
                 'type': _HOLD_NAMES[self.held_item],
@@ -357,26 +380,31 @@ class OvercookedSimEnv(gym.Env):
             self.held_item = HOLD_NONE
             return {}
 
-        # If hold plate and try to put on unprepped food, do nothing
-
-        # If hold unprepped food and try to put on plate, do nothing
         if self.held_item == HOLD_NONE:
-
             if self.layout[r][c] in (TILE_FISH_BOX, TILE_SHRIMP_BOX):
                 self.held_item = HOLD_FISH if self.layout[r][c] == TILE_FISH_BOX else HOLD_SHRIMP
-                return {'ingredient': True}
+                correct = (self.held_item == HOLD_FISH   and self.order == 'cutFish') or \
+                          (self.held_item == HOLD_SHRIMP and self.order == 'cutShrimp')
+                return {'ingredient': True, 'ingredient_correct': correct}
 
             for item in self.world_items:
                 if item['row'] == r and item['col'] == c:
                     self.held_item = _NAME_TO_HOLD[item['type']]
+                    event = {}
                     if item['type'] == 'plate':
                         self.plate_ingredient = _NAME_TO_HOLD.get(item.get('holds', 'nothing'), HOLD_NONE)
+                        holds = item.get('holds', 'nothing')
+                        if holds != 'nothing':
+                            correct = (holds == 'cutFish'   and self.order == 'cutFish') or \
+                                      (holds == 'cutShrimp' and self.order == 'cutShrimp')
+                            if correct:
+                                event = {'picked_up_plated_correct': True}
                     self.world_items.remove(item)
-                    return {}
+                    return event
 
-            return {}
+            return {'invalid': True}  # nothing to pick up
 
-        return {}
+        return {'invalid': True}
 
     # HELPER FUNCTIONS
 
@@ -389,6 +417,13 @@ class OvercookedSimEnv(gym.Env):
                 neighbors.append((nr, nc))
         return neighbors
 
+    def _serving_dist(self) -> int:
+        """Manhattan distance from the chef to the nearest serving cell."""
+        return min(
+            abs(self.chef_row - sr) + abs(self.chef_col - sc)
+            for sr, sc in self._serving_cells
+        )
+
     def _facing_cell(self):
         dr, dc = _FACING_TO_DIR[self.chef_facing]
         r, c = self.chef_row + dr, self.chef_col + dc
@@ -398,25 +433,34 @@ class OvercookedSimEnv(gym.Env):
         return None
 
     def _compute_reward(self, events: dict) -> float:
-        # Compute the rewards that the agent shuold receive based on the events that occured
         reward = -0.01
+        if events.get("ingredient"):
+            reward += 0.2 if events.get("ingredient_correct") else -0.02
+        if events.get("placed_on_board") and not self._board_reward_given:
+            reward += 2.0
+            self._board_reward_given = True
         if events.get("chopped"):
-            reward += 1.0
+            reward += 5.0 if events.get("chopped_correct") else 0.5
+        if events.get("plated_correct"):
+            reward += 10.0
+        if events.get("plated_wrong"):
+            reward += -1.0
+        if events.get("picked_up_plated_correct") and not self._plated_pickup_rewarded:
+            reward += 5.0
+            self._plated_pickup_rewarded = True
         if events.get("served"):
-            reward += 20.0
+            reward += 200.0 + max(0, self.max_steps - self.step_count) * 0.1
         if events.get("bad_serve"):
             reward += -3.0
-        if events.get("ingredient"):
-            reward += 0.2
-        if self.held_item != HOLD_NONE:
-            reward += 0.01
+        if events.get("invalid"):
+            reward += -0.15
         return reward
 
     # Observation Encoding
 
     def _encode_obs(self) -> np.ndarray:
         # Encode the current observation state into an array for state handling
-        obs = np.full(36, -1.0, dtype=np.float32)
+        obs = np.full(30, -1.0, dtype=np.float32)
 
         # [0-1] Chef Position
         obs[0] = self.chef_col / (self.GRID_COLS - 1)
@@ -433,27 +477,15 @@ class OvercookedSimEnv(gym.Env):
                     obs[8 + (2 * i) + 1] = item["row"] / (self.GRID_ROWS - 1)
                     break
 
-        # [18-19] Serving counter (static)
-        if "serving" in self._static_positions:
-            obs[18], obs[19] = self._static_positions["serving"]
+        # [18-21] Player facing
+        obs[18 + self.chef_facing] = 1.0
 
-        # [20-21] Fish box (static)
-        if "fish_box" in self._static_positions:
-            obs[20], obs[21] = self._static_positions["fish_box"]
-
-        # [22-23] Shrimp box (static)
-        if "shrimp_box" in self._static_positions:
-            obs[22], obs[23] = self._static_positions["shrimp_box"]
-
-        # [24-27] Player facing
-        obs[24 + self.chef_facing] = 1.0
-
-        # [28-29] Current order one-hot (0=cutFish, 1=cutShrimp)
+        # [22-23] Current order one-hot (0=cutFish, 1=cutShrimp)
         order_idx = 0 if self.order == "cutFish" else 1
-        obs[28 + order_idx] = 1.0
+        obs[22 + order_idx] = 1.0
 
-        # [30-35] Plate ingredient one-hot (same encoding as held item)
-        obs[30 + self.plate_ingredient] = 1.0
+        # [24-29] Plate ingredient one-hot (same encoding as held item)
+        obs[24 + self.plate_ingredient] = 1.0
 
         return obs
 
