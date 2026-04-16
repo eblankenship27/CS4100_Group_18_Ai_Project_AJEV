@@ -8,12 +8,15 @@ import vis_overcooked_gym as vis
 from Overcooked_sim_gym import OvercookedSimEnv
 
 # Flags
-train_flag = 'train' in sys.argv
+train_flag  = 'train'  in sys.argv
 render_flag = 'render' in sys.argv
+phase2_flag = 'phase2' in sys.argv
 
 if render_flag:
     vis.setup(render=True)
     env = vis.game
+elif phase2_flag:
+    env = OvercookedSimEnv(render_mode=None, max_steps=1000, orders_to_complete=2)
 else:
     env = OvercookedSimEnv(render_mode=None)
 
@@ -56,7 +59,7 @@ def hash_obs(obs):
 
 
 # Q-Learning
-def Q_learning(num_episodes=5000, gamma=0.9, epsilon=1.0, decay_rate=0.995,
+def Q_learning(num_episodes=5000, gamma=0.99, epsilon=1.0, decay_rate=0.995,
                init_Q=None, init_updates=None):
 
     Q_table = dict(init_Q) if init_Q is not None else {}
@@ -76,7 +79,7 @@ def Q_learning(num_episodes=5000, gamma=0.9, epsilon=1.0, decay_rate=0.995,
 
         total_reward = 0
 
-        for t in range(500):
+        for t in range(env.max_steps):
 
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
@@ -115,8 +118,6 @@ def Q_learning(num_episodes=5000, gamma=0.9, epsilon=1.0, decay_rate=0.995,
 
 
 # Parameters
-num_episodes = 1000000
-decay_rate = 0.999997
 '''
 Purpose	    num_episodes	decay_rate	Final ε	Notes
 Smoke test	5_000	        0.9994	    ~0.05	Just verify it learns at all
@@ -126,9 +127,22 @@ Full training500_000	    0.999994	~0.05	Strong policy
 Max	        1_000_000	    0.999997	~0.05	Diminishing returns past here
 '''
 
+# Phase 1 filenames (source for phase 2 curriculum seed)
+PHASE1_TABLE   = "Q_table_1000000_0.999997.pickle"
+PHASE1_UPDATES = "update_table_1000000_0.999997.pickle"
 
-filename        = f"Q_table_{num_episodes}_{decay_rate}.pickle"
-update_filename = f"update_table_{num_episodes}_{decay_rate}.pickle"
+if phase2_flag:
+    num_episodes = 500000
+    decay_rate   = 0.99994   # decays epsilon from 0.3 → ~0.05 over 500k episodes
+    gamma        = 0.99
+    filename        = f"Q_table_phase2_{num_episodes}_{decay_rate}.pickle"
+    update_filename = f"update_table_phase2_{num_episodes}_{decay_rate}.pickle"
+else:
+    num_episodes = 1000000
+    decay_rate   = 0.999997
+    gamma        = 0.9
+    filename        = f"Q_table_{num_episodes}_{decay_rate}.pickle"
+    update_filename = f"update_table_{num_episodes}_{decay_rate}.pickle"
 
 def softmax(x, temp=1.0):
 	e_x = np.exp((x - np.max(x)) / temp)
@@ -137,22 +151,49 @@ def softmax(x, temp=1.0):
 # Training Mode
 if train_flag:
 
-    # Resume from checkpoint if one exists
-    init_Q, init_updates, init_epsilon = None, None, 1.0
-    if os.path.exists(filename) and os.path.exists(update_filename):
-        with open(filename, "rb") as f:
-            init_Q = pickle.load(f)
-        with open(update_filename, "rb") as f:
-            checkpoint = pickle.load(f)
-            init_updates = checkpoint["updates"]
-            init_epsilon = checkpoint.get("epsilon", 1.0)
-        print(f"Resuming from {filename} ({len(init_Q)} states known, epsilon={init_epsilon:.4f})\n")
+    # Phase 2: seed from the phase 1 Q-table, then check for a phase 2 checkpoint
+    if phase2_flag:
+        init_Q, init_updates, init_epsilon = None, None, 0.3
+
+        # Load phase 1 table as the starting point
+        if os.path.exists(PHASE1_TABLE) and os.path.exists(PHASE1_UPDATES):
+            with open(PHASE1_TABLE, "rb") as f:
+                init_Q = pickle.load(f)
+            with open(PHASE1_UPDATES, "rb") as f:
+                init_updates = pickle.load(f)["updates"]
+            print(f"Phase 2: seeded from {PHASE1_TABLE} ({len(init_Q)} states)\n")
+        else:
+            print(f"WARNING: phase 1 table not found at {PHASE1_TABLE}, starting from scratch\n")
+
+        # If a phase 2 checkpoint already exists, resume from it instead
+        if os.path.exists(filename) and os.path.exists(update_filename):
+            with open(filename, "rb") as f:
+                init_Q = pickle.load(f)
+            with open(update_filename, "rb") as f:
+                checkpoint = pickle.load(f)
+                init_updates = checkpoint["updates"]
+                init_epsilon = checkpoint.get("epsilon", 0.3)
+            print(f"Resuming phase 2 from {filename} ({len(init_Q)} states, epsilon={init_epsilon:.4f})\n")
+
+    # Phase 1: resume from checkpoint if one exists
+    else:
+        init_Q, init_updates, init_epsilon = None, None, 1.0
+        if os.path.exists(filename) and os.path.exists(update_filename):
+            with open(filename, "rb") as f:
+                init_Q = pickle.load(f)
+            with open(update_filename, "rb") as f:
+                checkpoint = pickle.load(f)
+                init_updates = checkpoint["updates"]
+                init_epsilon = checkpoint.get("epsilon", 1.0)
+            print(f"Resuming from {filename} ({len(init_Q)} states known, epsilon={init_epsilon:.4f})\n")
+            
+    init_epsilon = max(init_epsilon, 0.3)  # Don't let epsilon get too low on resume
 
     print("\nStarting training...\n")
 
     Q_table, num_updates, final_epsilon, rewards = Q_learning(
         num_episodes=num_episodes,
-        gamma=0.9,
+        gamma=gamma,
         epsilon=init_epsilon,
         decay_rate=decay_rate,
         init_Q=init_Q,
@@ -205,7 +246,7 @@ else:
 
             if render_flag:
                 vis.refresh(obs, reward, terminated, truncated,
-                            {'action': action}, delay=0.05)
+                            {'action': action}, delay=0.25)
 
     print("\nEvaluation Results:")
     print("Average reward:", total_reward / 1000)

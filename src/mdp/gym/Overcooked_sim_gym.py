@@ -81,7 +81,7 @@ _FACING_TO_DIR = {
 
 class OvercookedSimEnv(gym.Env):
 
-    def __init__(self, layout=None, spawn=[], max_steps=500, render_mode=None):
+    def __init__(self, layout=None, spawn=[], max_steps=500, render_mode=None, orders_to_complete=1):
 
         super().__init__()
 
@@ -90,13 +90,16 @@ class OvercookedSimEnv(gym.Env):
         self.GRID_COLS = len(self.layout[0])
         self.max_steps = max_steps
         self.render_mode = render_mode
+        
+        self.order_to_complete = orders_to_complete
+        self.orders_completed = 0
 
         # Scan layout to populate special cells
         self._static_positions = {}
         self._serving_cells = []
         self._cutting_board_cells = []
         self._plate_shelf_cell = None
-        self._spawn_cells = [(3, 4), (3, 9)]
+        self._spawn_cells = [(3, 3), (3, 9)]
 
         for r, row in enumerate(self.layout):
             for c, tile in enumerate(row):
@@ -154,6 +157,7 @@ class OvercookedSimEnv(gym.Env):
         self.order = np.random.choice(["cutFish", "cutShrimp"])
         self._plated_pickup_rewarded = False
         self._board_reward_given = False
+        self.orders_completed = 0
 
         if self.render_mode == "human":
             self.render()
@@ -171,6 +175,7 @@ class OvercookedSimEnv(gym.Env):
             self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)
         )
         pre_dist = self._serving_dist() if carrying_plated else None
+        pre_src_dist = self._ingredient_source_dist() if self.held_item == HOLD_NONE else None
 
         events = {}
 
@@ -196,8 +201,16 @@ class OvercookedSimEnv(gym.Env):
             if still_carrying:
                 reward += (pre_dist - self._serving_dist()) * 0.15
 
-        # terminated = events.get("served", False)
-        terminated = False  # never terminate episodes on the environment side since we want to train on time-extended rewards
+        # Potential-based shaping: reward each step closer to the correct ingredient box
+        # while empty-handed (guides agent to the right source for the current order)
+        if pre_src_dist is not None and not events.get("ingredient"):
+            if self.held_item == HOLD_NONE:
+                reward += (pre_src_dist - self._ingredient_source_dist()) * 0.1
+
+        if events.get("served"):
+            self.orders_completed += 1
+
+        terminated = self.orders_completed >= self.order_to_complete
         truncated = self.step_count >= self.max_steps
 
         if self.render_mode == "human":
@@ -278,6 +291,7 @@ class OvercookedSimEnv(gym.Env):
                 self.plate_ingredient = HOLD_NONE
                 self.order = np.random.choice(['cutFish', 'cutShrimp'])
                 self._plated_pickup_rewarded = False
+                self._board_reward_given = False
                 return {"served": True}
 
             for item in self.world_items:
@@ -424,6 +438,16 @@ class OvercookedSimEnv(gym.Env):
             for sr, sc in self._serving_cells
         )
 
+    def _ingredient_source_dist(self) -> int:
+        """Manhattan distance to the correct ingredient box tile for the current order."""
+        target = "fish_box" if self.order == "cutFish" else "shrimp_box"
+        pos = self._static_positions.get(target)
+        if pos is None:
+            return 0
+        tc = round(pos[0] * (self.GRID_COLS - 1))
+        tr = round(pos[1] * (self.GRID_ROWS - 1))
+        return abs(self.chef_row - tr) + abs(self.chef_col - tc)
+
     def _facing_cell(self):
         dr, dc = _FACING_TO_DIR[self.chef_facing]
         r, c = self.chef_row + dr, self.chef_col + dc
@@ -435,7 +459,7 @@ class OvercookedSimEnv(gym.Env):
     def _compute_reward(self, events: dict) -> float:
         reward = -0.01
         if events.get("ingredient"):
-            reward += 0.2 if events.get("ingredient_correct") else -0.02
+            reward += 0.2 if events.get("ingredient_correct") else -0.5
         if events.get("placed_on_board") and not self._board_reward_given:
             reward += 2.0
             self._board_reward_given = True
@@ -449,7 +473,9 @@ class OvercookedSimEnv(gym.Env):
             reward += 5.0
             self._plated_pickup_rewarded = True
         if events.get("served"):
-            reward += 200.0 + max(0, self.max_steps - self.step_count) * 0.1
+            steps_per_order = self.max_steps / self.order_to_complete
+            steps_used = self.step_count - (self.orders_completed * steps_per_order)
+            reward += 200.0 + max(0, steps_per_order - steps_used) * 0.1
         if events.get("bad_serve"):
             reward += -3.0
         if events.get("invalid"):
