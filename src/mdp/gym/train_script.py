@@ -12,7 +12,10 @@ train_flag  = 'train'  in sys.argv
 render_flag = 'render' in sys.argv
 phase2_flag = 'phase2' in sys.argv
 
-if render_flag:
+if render_flag and phase2_flag:
+    vis.setup(render=True, max_steps=1000, orders_to_complete=2)
+    env = vis.game
+elif render_flag:
     vis.setup(render=True)
     env = vis.game
 elif phase2_flag:
@@ -133,7 +136,7 @@ PHASE1_UPDATES = "update_table_1000000_0.999997.pickle"
 
 if phase2_flag:
     num_episodes = 500000
-    decay_rate   = 0.99994   # decays epsilon from 0.3 → ~0.05 over 500k episodes
+    decay_rate   = 0.999988
     gamma        = 0.99
     filename        = f"Q_table_phase2_{num_episodes}_{decay_rate}.pickle"
     update_filename = f"update_table_phase2_{num_episodes}_{decay_rate}.pickle"
@@ -153,17 +156,20 @@ if train_flag:
 
     # Phase 2: seed from the phase 1 Q-table, then check for a phase 2 checkpoint
     if phase2_flag:
-        init_Q, init_updates, init_epsilon = None, None, 0.3
+        init_Q, init_updates, init_epsilon = None, None, 1
 
         # Load phase 1 table as the starting point
         if os.path.exists(PHASE1_TABLE) and os.path.exists(PHASE1_UPDATES):
             with open(PHASE1_TABLE, "rb") as f:
                 init_Q = pickle.load(f)
             with open(PHASE1_UPDATES, "rb") as f:
-                init_updates = pickle.load(f)["updates"]
+                checkpoint = pickle.load(f)
+                init_updates = checkpoint["updates"]
+            init_epsilon = 0.3  # warm start — preserve phase 1 knowledge
             print(f"Phase 2: seeded from {PHASE1_TABLE} ({len(init_Q)} states)\n")
         else:
             print(f"WARNING: phase 1 table not found at {PHASE1_TABLE}, starting from scratch\n")
+            
 
         # If a phase 2 checkpoint already exists, resume from it instead
         if os.path.exists(filename) and os.path.exists(update_filename):
@@ -246,7 +252,7 @@ else:
 
             if render_flag:
                 vis.refresh(obs, reward, terminated, truncated,
-                            {'action': action}, delay=0.25)
+                            {'action': action}, delay=0.05)
 
     print("\nEvaluation Results:")
     print("Average reward:", total_reward / 1000)

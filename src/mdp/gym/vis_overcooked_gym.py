@@ -342,14 +342,15 @@ def _overlay_end(served: bool):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def setup(render: bool = True):
+def setup(render: bool = True, max_steps: int = 500, orders_to_complete: int = 1):
     """
     Create the environment and (optionally) open the pygame window.
 
     Call this once before main() or before your training loop.
+    Pass max_steps=1000, orders_to_complete=2 for phase 2 rendering.
     """
     global screen, clock, game, action_log, game_ended
-    game       = OvercookedSimEnv(render_mode=None)
+    game       = OvercookedSimEnv(render_mode=None, max_steps=max_steps, orders_to_complete=orders_to_complete)
     game_ended = False
     action_log = ["Game started! Use keys to play."]
     game.reset()

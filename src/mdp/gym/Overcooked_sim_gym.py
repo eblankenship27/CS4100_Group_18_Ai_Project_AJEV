@@ -202,8 +202,10 @@ class OvercookedSimEnv(gym.Env):
                 reward += (pre_dist - self._serving_dist()) * 0.15
 
         # Potential-based shaping: reward each step closer to the correct ingredient box
-        # while empty-handed (guides agent to the right source for the current order)
-        if pre_src_dist is not None and not events.get("ingredient"):
+        # while empty-handed and before the ingredient has been placed on the board.
+        # Stops once _board_reward_given is True so the agent isn't pulled away from
+        # the cutting board after placement, or away from a plated dish.
+        if pre_src_dist is not None and not events.get("ingredient") and not self._board_reward_given:
             if self.held_item == HOLD_NONE:
                 reward += (pre_src_dist - self._ingredient_source_dist()) * 0.1
 
