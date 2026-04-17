@@ -165,10 +165,10 @@ def run_training(
 
     render_mode = "human" if render else None
     if env_type == 'sim':
-        from gym.Overcooked_sim_gym import OvercookedSimEnv
+        from Overcooked_sim_gym import OvercookedSimEnv
         env = OvercookedSimEnv(render_mode=render_mode)
     else:
-        from gym.Overcooked_mdp_gym import OvercookedEnv
+        from Overcooked_mdp_gym import OvercookedEnv
         env = OvercookedEnv(render_mode=render_mode)
 
     agent = OvercookedAgent(
