@@ -5,6 +5,10 @@
 
 **Execution Instructions:**
 
+To execute and train the agent, you may use **src/mdp/Overcooked_Q_Agent.py** and running **python Overcooked_Q_Agent.py** in its directory. By default, the program is configured to run 1,000 episodes within the simulated environment, however, the user can change the number of episodes the agent is trained on and the kind of environment being used for the agent.
+
+If the user wishes to train the agent in the real Overcooked environment, changing the *env_type* to anything other than *sim*, the program will use the real Overcooked Environment. When utilizing the real environment for the agent, the objectTrackingModels and templates folders must be in the same location as **Overcooked_Q_Agent.py**.
+
 **Structural Description:**
 
 This project is made up of 3 distinct parts, a visual pipeline, a gym enviornment, and a simulated game enviornment used for training.
@@ -20,4 +24,3 @@ This enviornment can be found within the file path **src/mdp/Overcooked_mdp_gym.
 The _simulated environment_ is a grid-based repersentation of the game that allowed for more efficient training. It uses the same state structure as the one visually derives from the real enviornment, developing policies in the simulation that can be directed translated tothe real gameplay. This enviornment is used to train the agent using Q-learning.
 
 This simulated enviornment can be found in the files **src/mdp/Overcooked_sim_gym.py** and **src/mdp/vis_overcooked_gym.py**.
-
