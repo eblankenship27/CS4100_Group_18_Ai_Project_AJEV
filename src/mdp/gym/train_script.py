@@ -9,18 +9,24 @@ import vis_overcooked_gym as vis
 from Overcooked_sim_gym import OvercookedSimEnv
 
 # Flags
-train_flag  = 'train'  in sys.argv
-render_flag = 'render' in sys.argv
-phase2_flag = 'phase2' in sys.argv
+train_flag     = 'train'     in sys.argv
+render_flag    = 'render'    in sys.argv
+phase2_flag    = 'phase2'    in sys.argv
+endurance_flag = 'endurance' in sys.argv
 
 if render_flag and phase2_flag:
     vis.setup(render=True, max_steps=1000, orders_to_complete=2)
+    env = vis.game
+elif render_flag and endurance_flag:
+    vis.setup(render=True, max_steps=2000, orders_to_complete=999)
     env = vis.game
 elif render_flag:
     vis.setup(render=True)
     env = vis.game
 elif phase2_flag:
     env = OvercookedSimEnv(render_mode=None, max_steps=1000, orders_to_complete=2)
+elif endurance_flag:
+    env = OvercookedSimEnv(render_mode=None, max_steps=2000, orders_to_complete=999)
 else:
     env = OvercookedSimEnv(render_mode=None)
 
@@ -138,7 +144,7 @@ Max	        1_000_000	    0.999997	~0.05	Diminishing returns past here
 PHASE1_TABLE   = "Q_table_1000000_0.999997.pickle"
 PHASE1_UPDATES = "update_table_1000000_0.999997.pickle"
 
-if phase2_flag:
+if phase2_flag or endurance_flag:
     num_episodes = 200000
     decay_rate   = 0.999985  # epsilon 1.0 → ~0.05 over 200k episodes
     gamma        = 0.99
@@ -251,6 +257,7 @@ else:
     total_reward = 0
     total_steps = 0
     rewards_per_episode = []
+    orders_per_episode = []
 
     for episode in tqdm(range(1000)):
 
@@ -282,9 +289,12 @@ else:
                             {'action': action, 'random': action_random}, delay=0.05)
 
         rewards_per_episode.append(episode_reward)
+        orders_per_episode.append(env.orders_completed)
 
     print("\nEvaluation Results:")
     print("Average reward:", total_reward / 1000)
+    print("Average orders per episode:", sum(orders_per_episode) / len(orders_per_episode))
+    print("Max orders in a single episode:", max(orders_per_episode))
     print("Total steps:", total_steps)
 
     # Plot rewards over episodes
