@@ -1,4 +1,5 @@
 import time
+import os
 
 import numpy as np
 import gymnasium as gym
@@ -70,7 +71,7 @@ class OvercookedEnv(gym.Env):
             self,
             players: int = 1,
             render_mode: str = None,
-            model_path: str = "objectTrackingModels/runs/detect/train2/weights/best.pt",
+            model_path: str = "src/objectTrackingModels/runs/detect/train2/weights/best.pt",
             serving_pos: tuple = (1460, 373),
             fish_box_pos: tuple = (414, 502),
             shrimp_box_pos: tuple = (1500, 590),
@@ -95,7 +96,7 @@ class OvercookedEnv(gym.Env):
         # Set up the OpenCV screen and object detection model
         self.model = YOLO(model_path)
         self.sct = mss.mss()
-        self.monitor = {"top": 200, "left": 0, "width": 600, "height": 400}
+        self.monitor = self.sct.monitors[1]  # primary screen, full resolution
 
         w, h = self.monitor["width"], self.monitor["height"]
 
@@ -159,6 +160,7 @@ class OvercookedEnv(gym.Env):
         self.prev_state = None
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
+        self.last_known_chef = (0.37512194315592445, 0.33323498478642216)  # chef spawn → grid (4, 2)
 
         # Statistics for chef timings and coordinates
         self.move_duration = 0.05
@@ -249,7 +251,10 @@ class OvercookedEnv(gym.Env):
         obs = np.full(30, -1.0, dtype=np.float32)
 
         if game_state["chef"] is not None:
+            self.last_known_chef = game_state["chef"]
             obs[0], obs[1] = game_state["chef"]
+        elif self.last_known_chef is not None:
+            obs[0], obs[1] = self.last_known_chef  # fallback to last known position
 
         # [2-7] held item one-hot
         obs[2 + self.held_item] = 1.0
@@ -268,6 +273,9 @@ class OvercookedEnv(gym.Env):
             obs[22] = 1.0
         elif order == 2:
             obs[23] = 1.0
+        elif order == 0:
+            # if it can't find an order, default to fish order until it overrides
+            obs[22] = 1.0
 
         # [24-29] plate ingredient one-hot (same encoding as held item)
         obs[24 + self.plate_ingredient] = 1.0
@@ -284,7 +292,9 @@ class OvercookedEnv(gym.Env):
         best_label = 0  # 0 = no order detected
         best_score = 0.6
         
-        for label, path in [(1, "templates/fish_order.png"), (2, "templates/shrimp_order.png")]:
+        _tmpl_dir = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
+        for label, path in [(1, os.path.join(_tmpl_dir, "fish_order.png")),
+                            (2, os.path.join(_tmpl_dir, "shrimp_order.png"))]:
             template = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
             if template is None:
                 continue
@@ -376,6 +386,7 @@ class OvercookedEnv(gym.Env):
         self.step_count = 0
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
+        self.last_known_chef = (0.37512194315592445, 0.33323498478642216)
 
         # TODO: Need to somehow call the game to reset? or should this get called when the game is reset?
 
