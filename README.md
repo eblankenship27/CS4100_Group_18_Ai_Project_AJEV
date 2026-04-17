@@ -5,7 +5,7 @@
 
 **Execution Instructions:**
 
-**Approach Statement:**
+**Structural Description:**
 
 This project is made up of 3 distinct parts, a visual pipeline, a gym enviornment, and a simulated game enviornment used for training.
 
