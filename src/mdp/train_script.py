@@ -134,22 +134,25 @@ Full training500_000	    0.999994	~0.05	Strong policy
 Max	        1_000_000	    0.999997	~0.05	Diminishing returns past here
 '''
 
+PICKLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pickles")
+os.makedirs(PICKLES_DIR, exist_ok=True)
+
 # Phase 1 filenames (source for phase 2 curriculum seed)
-PHASE1_TABLE   = "Q_table_1000000_0.999997.pickle"
-PHASE1_UPDATES = "update_table_1000000_0.999997.pickle"
+PHASE1_TABLE   = os.path.join(PICKLES_DIR, "Q_table_1000000_0.999997.pickle")
+PHASE1_UPDATES = os.path.join(PICKLES_DIR, "update_table_1000000_0.999997.pickle")
 
 if phase2_flag:
     num_episodes = 200000
     decay_rate   = 0.999985  # epsilon 1.0 → ~0.05 over 200k episodes
     gamma        = 0.99
-    filename        = f"Q_table_phase2_{num_episodes}_{decay_rate}.pickle"
-    update_filename = f"update_table_phase2_{num_episodes}_{decay_rate}.pickle"
+    filename        = os.path.join(PICKLES_DIR, f"Q_table_phase2_{num_episodes}_{decay_rate}.pickle")
+    update_filename = os.path.join(PICKLES_DIR, f"update_table_phase2_{num_episodes}_{decay_rate}.pickle")
 else:
     num_episodes = 1000000
     decay_rate   = 0.999997
     gamma        = 0.9
-    filename        = f"Q_table_{num_episodes}_{decay_rate}.pickle"
-    update_filename = f"update_table_{num_episodes}_{decay_rate}.pickle"
+    filename        = os.path.join(PICKLES_DIR, f"Q_table_{num_episodes}_{decay_rate}.pickle")
+    update_filename = os.path.join(PICKLES_DIR, f"update_table_{num_episodes}_{decay_rate}.pickle")
 
 def softmax(x, temp=1.0):
 	e_x = np.exp((x - np.max(x)) / temp)

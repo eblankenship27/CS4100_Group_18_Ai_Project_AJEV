@@ -5,6 +5,9 @@ import gymnasium as gym
 import pickle
 import os
 
+PICKLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pickles")
+os.makedirs(PICKLES_DIR, exist_ok=True)
+
 
 def hash_obs(obs):
     """Discretize a 30-float observation into a compact tuple state key.
@@ -148,8 +151,8 @@ class OvercookedAgent:
 
 def run_training(
     n_episodes: int = 1000,
-    save_file: str = "q_table.pickle",
-    update_file: str = "update_table.pickle",
+    save_file: str = os.path.join(PICKLES_DIR, "q_table.pickle"),
+    update_file: str = os.path.join(PICKLES_DIR, "update_table.pickle"),
     save_every: int = 50,
     render: bool = False,
     env_type: str = 'sim',
@@ -228,9 +231,9 @@ if __name__ == "__main__":
     # python Overcooked_Q_Agent.py
     
     run_training(
-        n_episodes=1000, 
-        save_file='q_table.pickle', 
-        update_file='update_table.pickle', 
+        n_episodes=1000,
+        save_file=os.path.join(PICKLES_DIR, 'q_table.pickle'),
+        update_file=os.path.join(PICKLES_DIR, 'update_table.pickle'),
         save_every=50, 
         render=False,
         env_type='sim', 
