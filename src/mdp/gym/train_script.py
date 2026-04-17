@@ -3,6 +3,7 @@ import os
 import pickle
 import numpy as np
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 import vis_overcooked_gym as vis
 
 from Overcooked_sim_gym import OvercookedSimEnv
@@ -58,7 +59,10 @@ def hash_obs(obs):
     # obs[24-29] = plate ingredient one-hot
     plate_ing = int(np.argmax(o[24:30]))
 
-    return x, y, held, facing, plate_x, plate_y, fish_x, fish_y, shrimp_x, shrimp_y, cutFish_x, cutFish_y, cutShrimp_x, cutShrimp_y, order, plate_ing
+    # obs[30] = board reward given flag (1.0 = ingredient has been placed on board this order)
+    board_given = int(o[30] > 0)
+
+    return x, y, held, facing, plate_x, plate_y, fish_x, fish_y, shrimp_x, shrimp_y, cutFish_x, cutFish_y, cutShrimp_x, cutShrimp_y, order, plate_ing, board_given
 
 
 # Q-Learning
@@ -135,8 +139,8 @@ PHASE1_TABLE   = "Q_table_1000000_0.999997.pickle"
 PHASE1_UPDATES = "update_table_1000000_0.999997.pickle"
 
 if phase2_flag:
-    num_episodes = 500000
-    decay_rate   = 0.999988
+    num_episodes = 200000
+    decay_rate   = 0.999985  # epsilon 1.0 → ~0.05 over 200k episodes
     gamma        = 0.99
     filename        = f"Q_table_phase2_{num_episodes}_{decay_rate}.pickle"
     update_filename = f"update_table_phase2_{num_episodes}_{decay_rate}.pickle"
@@ -213,6 +217,24 @@ if train_flag:
 
     print(f"\nSaved Q-table to {filename}")
 
+    # Plot training rewards
+    window = max(1, num_episodes // 100)  # smooth over 1% of episodes
+    smoothed = np.convolve(rewards, np.ones(window) / window, mode='valid')
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(rewards, alpha=0.2, color='darkorange', label='Episode reward')
+    ax.plot(range(window - 1, len(rewards)), smoothed, color='darkorange', linewidth=2, label=f'{window}-episode moving avg')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Total Reward')
+    label = 'Phase 2 ' if phase2_flag else ''
+    ax.set_title(f'{label}Training Rewards over {num_episodes} Episodes')
+    ax.legend()
+    plt.tight_layout()
+    graph_filename = filename.replace('.pickle', '_rewards.png')
+    plt.savefig(graph_filename, dpi=150)
+    plt.show()
+    print(f"Reward graph saved to {graph_filename}")
+
 
 # Evaluation Mode
 else:
@@ -228,6 +250,7 @@ else:
 
     total_reward = 0
     total_steps = 0
+    rewards_per_episode = []
 
     for episode in tqdm(range(1000)):
 
@@ -235,25 +258,48 @@ else:
         state = hash_obs(obs)
 
         done = False
+        episode_reward = 0
 
         while not done:
             total_steps += 1
 
             if state in Q_table:
                 action = np.random.choice(env.action_space.n, p=softmax(Q_table[state]))  # Select action using softmax over Q-values
+                action_random = False
             else:
                 action = env.action_space.sample()
+                action_random = True
 
             obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
             total_reward += reward
+            episode_reward += reward
             state = hash_obs(obs)
 
             if render_flag:
                 vis.refresh(obs, reward, terminated, truncated,
-                            {'action': action}, delay=0.05)
+                            {'action': action, 'random': action_random}, delay=0.05)
+
+        rewards_per_episode.append(episode_reward)
 
     print("\nEvaluation Results:")
     print("Average reward:", total_reward / 1000)
     print("Total steps:", total_steps)
+
+    # Plot rewards over episodes
+    window = 50
+    smoothed = np.convolve(rewards_per_episode, np.ones(window) / window, mode='valid')
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(rewards_per_episode, alpha=0.3, color='steelblue', label='Episode reward')
+    ax.plot(range(window - 1, len(rewards_per_episode)), smoothed, color='steelblue', linewidth=2, label=f'{window}-episode moving avg')
+    ax.axhline(total_reward / 1000, color='red', linestyle='--', linewidth=1, label=f'Mean ({total_reward / 1000:.1f})')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Total Reward')
+    ax.set_title('Evaluation Rewards over 1000 Episodes')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig('evaluation_rewards.png', dpi=150)
+    plt.show()
+    print("Reward graph saved to evaluation_rewards.png")

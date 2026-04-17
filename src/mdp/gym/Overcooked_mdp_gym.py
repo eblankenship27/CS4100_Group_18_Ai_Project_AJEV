@@ -127,7 +127,7 @@ class OvercookedEnv(gym.Env):
         self.actions = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'CHOP', 'PICKUP']
         self.action_space = spaces.Discrete(len(self.actions))
 
-        # 30-float observation vector:
+        # 31-float observation vector:
         # [0-1]   chef (x, y)
         # [2-7]   one-hot: held item (none/plate/fish/shrimp/cutFish/cutShrimp)
         # [8-9]   first plate center
@@ -138,10 +138,11 @@ class OvercookedEnv(gym.Env):
         # [18-21] one-hot chef facing (up/down/left/right)
         # [22-23] one-hot current order (0=cutFish, 1=cutShrimp); -1 if undetected
         # [24-29] one-hot plate ingredient (same encoding as held item)
+        # [30]    board reward given flag (1.0 = ingredient placed on board this order)
         #
         # Undetected objects default to (-1, -1)
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(30,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(31,), dtype=np.float32
         )
         
         self.serving_counter_pos  = self._normalize(*STATIC_STATIONS["servingCounter"])
@@ -160,6 +161,10 @@ class OvercookedEnv(gym.Env):
         self.prev_state = None
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
+        self._board_reward_given = False
+        self._plated_pickup_rewarded = False
+        self._picked_correct_ingredient = False
+        self.current_order = 0
         self.last_known_chef = (0.37512194315592445, 0.33323498478642216)  # chef spawn → grid (4, 2)
 
         # Statistics for chef timings and coordinates
@@ -248,7 +253,7 @@ class OvercookedEnv(gym.Env):
         return state
 
     def _encode_state(self, game_state, order):
-        obs = np.full(30, -1.0, dtype=np.float32)
+        obs = np.full(31, -1.0, dtype=np.float32)
 
         if game_state["chef"] is not None:
             self.last_known_chef = game_state["chef"]
@@ -280,8 +285,11 @@ class OvercookedEnv(gym.Env):
         # [24-29] plate ingredient one-hot (same encoding as held item)
         obs[24 + self.plate_ingredient] = 1.0
 
+        # [30] board reward given flag — distinguishes episode-start from post-plating
+        obs[30] = 1.0 if self._board_reward_given else 0.0
+
         return obs
-    
+
     def _detect_order(self):
         order_region = {
             "top": 0, "left": 8, "width": 116, "height": 140
@@ -320,6 +328,24 @@ class OvercookedEnv(gym.Env):
                 return True
         return False
 
+    def _serving_dist(self, chef_pos=None) -> float:
+        """Euclidean distance (normalized) from chef to the serving counter."""
+        if chef_pos is None:
+            chef_pos = self.prev_state.get("chef") if self.prev_state else None
+        if chef_pos is None:
+            return 0.0
+        sx, sy = self.serving_counter_pos
+        return ((chef_pos[0] - sx) ** 2 + (chef_pos[1] - sy) ** 2) ** 0.5
+
+    def _ingredient_source_dist(self, chef_pos=None) -> float:
+        """Euclidean distance (normalized) from chef to the correct ingredient box."""
+        if chef_pos is None:
+            chef_pos = self.prev_state.get("chef") if self.prev_state else None
+        if chef_pos is None or self.current_order == 0:
+            return 0.0
+        target = self.fish_box_pos if self.current_order == 1 else self.shrimp_box_pos
+        return ((chef_pos[0] - target[0]) ** 2 + (chef_pos[1] - target[1]) ** 2) ** 0.5
+
     def _update_held_item(self, action, prev_state):
         if action != ACTION_PICKUP:
             return
@@ -354,28 +380,52 @@ class OvercookedEnv(gym.Env):
     # Reward
     # ------------------------------------------------------------------
 
-    def _compute_reward(self, prev_state, curr_state, action):
+    def _compute_reward(self, prev_state, curr_state, action,
+                        just_picked_ingredient=False, ingredient_correct=False,
+                        just_picked_plated=False):
         reward = -0.01  # time penalty
 
-        prev_cut = len(prev_state["cutFish"]) + len(prev_state["cutShrimp"])
-        curr_cut = len(curr_state["cutFish"]) + len(curr_state["cutShrimp"])
+        prev_cut = len(prev_state.get("cutFish", [])) + len(prev_state.get("cutShrimp", []))
+        curr_cut = len(curr_state.get("cutFish", [])) + len(curr_state.get("cutShrimp", []))
+
+        # Ingredient pickup
+        if just_picked_ingredient:
+            reward += 0.2 if ingredient_correct else -0.5
+
+        # Chop detected — also acts as proxy for board placement since board placement
+        # cannot be reliably detected from YOLO alone
         if curr_cut > prev_cut:
-            reward += 1.0
+            if not self._board_reward_given and self._picked_correct_ingredient:
+                reward += 2.0  # board placement bonus
+            self._board_reward_given = True
+            reward += 5.0 if self._picked_correct_ingredient else 0.0
 
-        # Serving: PICKUP/SETDOWN near the detected serving counter
-        # while a processed ingredient disappears from the scene
-        if action == ACTION_PICKUP and curr_state["chef"] is not None:
-            serving_pos = self.serving_counter_pos
-            if serving_pos is not None:
-                chef_pos = curr_state["chef"]
-                dist = (
-                               (chef_pos[0] - serving_pos[0]) ** 2
-                               + (chef_pos[1] - serving_pos[1]) ** 2
-                       ) ** 0.5
-                if dist < 0.1 and curr_cut < prev_cut:
-                    reward += 5.0
+        # Plated dish pickup (plate carrying a cut ingredient)
+        if just_picked_plated and not self._plated_pickup_rewarded:
+            correct = (
+                (self.plate_ingredient == HOLD_CUTFISH   and self.current_order == 1) or
+                (self.plate_ingredient == HOLD_CUTSHRIMP and self.current_order == 2)
+            )
+            if correct:
+                reward += 5.0
+                self._plated_pickup_rewarded = True
 
-        return reward
+        # Serve: PICKUP near serving counter while a cut item disappears from the scene
+        served = False
+        if action == ACTION_PICKUP and curr_state.get("chef") is not None:
+            chef_pos = curr_state["chef"]
+            dist = (
+                (chef_pos[0] - self.serving_counter_pos[0]) ** 2 +
+                (chef_pos[1] - self.serving_counter_pos[1]) ** 2
+            ) ** 0.5
+            if dist < 0.1 and curr_cut < prev_cut:
+                reward += 200.0
+                served = True
+                self._board_reward_given = False
+                self._plated_pickup_rewarded = False
+                self._picked_correct_ingredient = False
+
+        return reward, served
 
     # ------------------------------------------------------------------
     # Gymnasium interface
@@ -386,6 +436,9 @@ class OvercookedEnv(gym.Env):
         self.step_count = 0
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
+        self._board_reward_given = False
+        self._plated_pickup_rewarded = False
+        self._picked_correct_ingredient = False
         self.last_known_chef = (0.37512194315592445, 0.33323498478642216)
 
         # TODO: Need to somehow call the game to reset? or should this get called when the game is reset?
@@ -394,6 +447,7 @@ class OvercookedEnv(gym.Env):
         detections = self._detect_objects(frame)
         self.prev_state = self._build_game_state(detections)
         order = self._detect_order()
+        self.current_order = order
         obs = self._encode_state(self.prev_state, order)
 
         return obs, {}
@@ -401,16 +455,74 @@ class OvercookedEnv(gym.Env):
     def step(self, action):
         self.step_count += 1
 
+        # Capture pre-action state for potential-based shaping
+        prev_held = self.held_item
+        carrying_plated = (
+            self.held_item == HOLD_PLATE and
+            self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)
+        )
+        pre_chef_pos = self.prev_state.get("chef") if self.prev_state else None
+        pre_serve_dist = self._serving_dist(pre_chef_pos) if carrying_plated else None
+        pre_src_dist   = (
+            self._ingredient_source_dist(pre_chef_pos)
+            if (self.held_item == HOLD_NONE and not self._board_reward_given)
+            else None
+        )
+
         self._execute_action(action)
 
         frame = self._capture_frame()
         detections = self._detect_objects(frame)
         curr_state = self._build_game_state(detections)
 
-        self._update_held_item(action, self.prev_state)
+        # Detect order before updating held item so correctness can be checked
         order = self._detect_order()
+        self.current_order = order
+
+        self._update_held_item(action, self.prev_state)
+
+        # Detect ingredient pickup event by comparing held item before and after
+        just_picked_ingredient = (prev_held == HOLD_NONE and
+                                  self.held_item in (HOLD_FISH, HOLD_SHRIMP))
+        if just_picked_ingredient:
+            ingredient_correct = (
+                (self.held_item == HOLD_FISH   and order == 1) or
+                (self.held_item == HOLD_SHRIMP and order == 2)
+            )
+            self._picked_correct_ingredient = ingredient_correct
+        else:
+            ingredient_correct = False
+
+        # Detect plated dish pickup (empty-handed → holding plate with ingredient)
+        just_picked_plated = (
+            prev_held == HOLD_NONE and
+            self.held_item == HOLD_PLATE and
+            self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)
+        )
+
         obs = self._encode_state(curr_state, order)
-        reward = self._compute_reward(self.prev_state, curr_state, action)
+        reward, served = self._compute_reward(
+            self.prev_state, curr_state, action,
+            just_picked_ingredient=just_picked_ingredient,
+            ingredient_correct=ingredient_correct,
+            just_picked_plated=just_picked_plated,
+        )
+
+        curr_chef_pos = curr_state.get("chef")
+
+        # Serving shaping: reward steps toward serving counter while carrying plated dish
+        if pre_serve_dist is not None and not served:
+            if (self.held_item == HOLD_PLATE and
+                    self.plate_ingredient in (HOLD_CUTFISH, HOLD_CUTSHRIMP)):
+                reward += (pre_serve_dist - self._serving_dist(curr_chef_pos)) * 0.15
+
+        # Ingredient source shaping: reward steps toward correct box while empty and pre-board
+        if (pre_src_dist is not None and
+                not just_picked_ingredient and
+                not self._board_reward_given and
+                self.held_item == HOLD_NONE):
+            reward += (pre_src_dist - self._ingredient_source_dist(curr_chef_pos)) * 0.1
+
         self.prev_state = curr_state
 
         terminated = False

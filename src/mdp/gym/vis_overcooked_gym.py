@@ -83,11 +83,12 @@ FACING_NAMES = {
 }
 
 # ── Module-level state ────────────────────────────────────────────────────────
-screen     = None
-clock      = None
-game       = None
-game_ended = False
-action_log = []          # rolling list[str] of recent step results
+screen             = None
+clock              = None
+game               = None
+game_ended         = False
+action_log         = []          # rolling list[str] of recent step results
+last_action_source = None        # 'random' | 'policy' | None (not yet set)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -249,6 +250,25 @@ def _draw_console():
     y += 18
 
     y += 4
+
+    # ── Action source indicator ───────────────────────────────────────────────
+    if last_action_source == 'random':
+        src_text  = "Action: RANDOM  (exploring)"
+        src_color = (210, 120, 0)   # orange
+        badge_col = (210, 120, 0)
+    elif last_action_source == 'policy':
+        src_text  = "Action: Q-TABLE (exploiting)"
+        src_color = (0, 150, 50)    # green
+        badge_col = (0, 150, 50)
+    else:
+        src_text  = "Action: —"
+        src_color = DARK_GRAY
+        badge_col = DARK_GRAY
+
+    pygame.draw.rect(screen, badge_col, pygame.Rect(x, y + 3, 10, 10), border_radius=2)
+    screen.blit(font_info.render(src_text, True, src_color), (x + 16, y))
+    y += 24
+
     pygame.draw.line(screen, DARK_GRAY, (x, y), (x + CONSOLE_WIDTH - 24, y), 1)
     y += 10
 
@@ -426,10 +446,14 @@ def refresh(obs, reward: float, terminated: bool, truncated: bool,
     info       : info dict; may contain 'action' (int) or 'action_name' (str)
     delay      : seconds to sleep after rendering (default 0.1)
     """
-    global action_log, game_ended
+    global action_log, game_ended, last_action_source
+
+    is_random          = info.get('random', None)
+    last_action_source = 'random' if is_random else ('policy' if is_random is not None else None)
 
     action_name = info.get('action_name') or ACTION_NAMES.get(info.get('action'), '?')
-    entry = f"{action_name}: r={reward:+.2f}"
+    src_tag     = ' [RND]' if is_random else (' [Q]' if is_random is not None else '')
+    entry       = f"{action_name}{src_tag}: r={reward:+.2f}"
     if terminated: entry += "  [SERVED!]"
     if truncated:  entry += "  [TIMEOUT]"
     action_log.append(entry)

@@ -119,11 +119,12 @@ class OvercookedSimEnv(gym.Env):
                     self._static_positions["plate_shelf"] = (nx, ny)
                     self._plate_shelf_cell = (r, c)
 
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(30,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(31,), dtype=np.float32)
         self.action_space = spaces.Discrete(6)
 
-        self.chef_row = self._spawn_cells[0][0]
-        self.chef_col = self._spawn_cells[0][1]
+        spawn = self._spawn_cells[np.random.randint(len(self._spawn_cells))]
+        self.chef_row = spawn[0]
+        self.chef_col = spawn[1]
         self.chef_facing = ACTION_DOWN
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
@@ -139,11 +140,12 @@ class OvercookedSimEnv(gym.Env):
         self.step_count = 0
         self._plated_pickup_rewarded = False
         self._board_reward_given = False
+        self._picked_correct_ingredient = False
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.step_count = 0
-        self.chef_row, self.chef_col = self._spawn_cells[0]
+        self.chef_row, self.chef_col = self._spawn_cells[np.random.randint(len(self._spawn_cells))]
         self.chef_facing = ACTION_DOWN
         self.held_item = HOLD_NONE
         self.plate_ingredient = HOLD_NONE
@@ -157,6 +159,7 @@ class OvercookedSimEnv(gym.Env):
         self.order = np.random.choice(["cutFish", "cutShrimp"])
         self._plated_pickup_rewarded = False
         self._board_reward_given = False
+        self._picked_correct_ingredient = False
         self.orders_completed = 0
 
         if self.render_mode == "human":
@@ -176,6 +179,13 @@ class OvercookedSimEnv(gym.Env):
         )
         pre_dist = self._serving_dist() if carrying_plated else None
         pre_src_dist = self._ingredient_source_dist() if self.held_item == HOLD_NONE else None
+        
+        plated_waiting = (
+            self.held_item == HOLD_NONE and
+            self._board_reward_given and
+            not self._plated_pickup_rewarded
+        )
+        pre_plate_dist = self._plated_dish_dist() if plated_waiting else None
 
         events = {}
 
@@ -191,8 +201,7 @@ class OvercookedSimEnv(gym.Env):
 
         reward = self._compute_reward(events)
 
-        # Potential-based shaping: reward each step closer to the serving counter
-        # while continuously carrying the correctly plated dish
+        # Potential-based shaping: reward each step closer to the serving counter while continuously carrying the correctly plated dish
         if pre_dist is not None and not events.get("served"):
             still_carrying = (
                 self.held_item == HOLD_PLATE and
@@ -200,11 +209,15 @@ class OvercookedSimEnv(gym.Env):
             )
             if still_carrying:
                 reward += (pre_dist - self._serving_dist()) * 0.15
+                
+        # Potential-based shaping: reward steps toward the plated dish while it sits uncollected — fills the gap between plating (+10) and picking up the plate.
+        if pre_plate_dist is not None and not events.get("picked_up_plated_correct"):
+            if self.held_item == HOLD_NONE and not self._plated_pickup_rewarded:
+                reward += (pre_plate_dist - self._plated_dish_dist()) * 0.15
 
-        # Potential-based shaping: reward each step closer to the correct ingredient box
-        # while empty-handed and before the ingredient has been placed on the board.
-        # Stops once _board_reward_given is True so the agent isn't pulled away from
-        # the cutting board after placement, or away from a plated dish.
+
+        # Potential-based shaping: reward each step closer to the correct ingredient box while empty-handed and before the ingredient has been placed on the board.
+        # Stops once _board_reward_given is True so the agent isn't pulled away from the cutting board after placement, or away from a plated dish.
         if pre_src_dist is not None and not events.get("ingredient") and not self._board_reward_given:
             if self.held_item == HOLD_NONE:
                 reward += (pre_src_dist - self._ingredient_source_dist()) * 0.1
@@ -294,6 +307,7 @@ class OvercookedSimEnv(gym.Env):
                 self.order = np.random.choice(['cutFish', 'cutShrimp'])
                 self._plated_pickup_rewarded = False
                 self._board_reward_given = False
+                self._picked_correct_ingredient = False
                 return {"served": True}
 
             for item in self.world_items:
@@ -401,6 +415,7 @@ class OvercookedSimEnv(gym.Env):
                 self.held_item = HOLD_FISH if self.layout[r][c] == TILE_FISH_BOX else HOLD_SHRIMP
                 correct = (self.held_item == HOLD_FISH   and self.order == 'cutFish') or \
                           (self.held_item == HOLD_SHRIMP and self.order == 'cutShrimp')
+                self._picked_correct_ingredient = correct
                 return {'ingredient': True, 'ingredient_correct': correct}
 
             for item in self.world_items:
@@ -439,6 +454,18 @@ class OvercookedSimEnv(gym.Env):
             abs(self.chef_row - sr) + abs(self.chef_col - sc)
             for sr, sc in self._serving_cells
         )
+    
+    def _plated_dish_dist(self) -> int:
+        """Manhattan distance to the nearest correctly plated dish sitting in the world."""
+        for item in self.world_items:
+            if item['type'] == 'plate' and item['holds'] != 'nothing':
+                correct = (
+                    (item['holds'] == 'cutFish'   and self.order == 'cutFish') or
+                    (item['holds'] == 'cutShrimp' and self.order == 'cutShrimp')
+                )
+                if correct:
+                    return abs(self.chef_row - item['row']) + abs(self.chef_col - item['col'])
+        return 0        
 
     def _ingredient_source_dist(self) -> int:
         """Manhattan distance to the correct ingredient box tile for the current order."""
@@ -463,10 +490,11 @@ class OvercookedSimEnv(gym.Env):
         if events.get("ingredient"):
             reward += 0.2 if events.get("ingredient_correct") else -0.5
         if events.get("placed_on_board") and not self._board_reward_given:
-            reward += 2.0
+            if self._picked_correct_ingredient:
+                reward += 2.0
             self._board_reward_given = True
         if events.get("chopped"):
-            reward += 5.0 if events.get("chopped_correct") else 0.5
+            reward += 5.0 if events.get("chopped_correct") else 0
         if events.get("plated_correct"):
             reward += 10.0
         if events.get("plated_wrong"):
@@ -488,7 +516,7 @@ class OvercookedSimEnv(gym.Env):
 
     def _encode_obs(self) -> np.ndarray:
         # Encode the current observation state into an array for state handling
-        obs = np.full(30, -1.0, dtype=np.float32)
+        obs = np.full(31, -1.0, dtype=np.float32)
 
         # [0-1] Chef Position
         obs[0] = self.chef_col / (self.GRID_COLS - 1)
@@ -514,6 +542,9 @@ class OvercookedSimEnv(gym.Env):
 
         # [24-29] Plate ingredient one-hot (same encoding as held item)
         obs[24 + self.plate_ingredient] = 1.0
+
+        # [30] Board reward given flag — distinguishes episode-start from post-plating
+        obs[30] = 1.0 if self._board_reward_given else 0.0
 
         return obs
 
